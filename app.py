@@ -1,127 +1,86 @@
 import streamlit as st
-import pandas as pd
-from handle import DatabaseHandler
+import handle
 import uuid
 
-# Initialize database handler
-db = DatabaseHandler()  # No need to pass connection string anymore
-# Initialize database handler
-CONNECTION_STRING = "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
-db = DatabaseHandler(CONNECTION_STRING)
+st.set_page_config(page_title="MaisterTask Clone", layout="wide")
 
-# Initialize session state
-if 'authenticated_tasks' not in st.session_state:
-    st.session_state.authenticated_tasks = set()
+# Initialize session state variables
+if 'board' not in st.session_state:
+    st.session_state.board = None
+if 'table' not in st.session_state:
+    st.session_state.table = None
+if 'board_id' not in st.session_state:
+    st.session_state.board_id = None
+if 'password' not in st.session_state:
+    st.session_state.password = None
 
-def main():
-    st.title("Task Management System")
-    
-    # Table selection
-    table_number = st.sidebar.selectbox("Select Table", range(1, 7), format_func=lambda x: f"Table {x}")
-    
-    # Create new task
-    with st.sidebar.expander("Create New Task"):
-        create_new_task(table_number)
+st.sidebar.title("Board Access")
+mode = st.sidebar.selectbox("Select Mode", ["Load Board", "Create Board"])
 
-    # Main content area with columns for different statuses
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.header("Tasks")
-        display_tasks(table_number, "Task")
-        
-    with col2:
-        st.header("In Progress")
-        display_tasks(table_number, "In Progress")
-        
-    with col3:
-        st.header("Done")
-        display_tasks(table_number, "Done")
-        
-    with col4:
-        st.header("BrainStorm")
-        display_tasks(table_number, "BrainStorm")
+with st.sidebar.form(key="board_form"):
+    table_choice = st.selectbox("Select Table", 
+                                ["table1", "table2", "table3", "table4", "table5", "table6"])
+    board_id_input = st.text_input("Board ID")
+    password_input = st.text_input("Password", type="password")
+    submit_button = st.form_submit_button(label="Submit")
 
-def create_new_task(table_number):
-    content = st.text_area("Task Content")
-    password = st.text_input("Set Password", type="password")
-    status = st.selectbox("Initial Status", ["Task", "In Progress", "Done", "BrainStorm"])
-    
-    if st.button("Create Task"):
-        if content and password:
-            task_id = str(uuid.uuid4())
-            if db.create_task(table_number, task_id, password, content, status):
-                st.success("Task created successfully!")
-                st.experimental_rerun()
-            else:
-                st.error("Failed to create task")
-        else:
-            st.warning("Please fill in all fields")
+if submit_button:
+    st.session_state.table = table_choice
+    st.session_state.board_id = board_id_input
+    st.session_state.password = password_input
+    if mode == "Create Board":
+        # Create a new board with empty columns
+        handle.create_board(table_choice, board_id_input, password_input)
+        st.success("Board created. You can now add tasks.")
+    # Load board from DB
+    board = handle.get_board(table_choice, board_id_input, password_input)
+    if board:
+        st.session_state.board = board
+    else:
+        st.error("Board not found or incorrect password.")
 
-def display_tasks(table_number, status):
-    tasks_df = db.get_tasks(table_number)
+if st.session_state.board:
+    st.title(f"Board: {st.session_state.board_id} ({st.session_state.table})")
     
-    if not tasks_df.empty:
-        for idx, row in tasks_df.iterrows():
-            task_id = row['id']
-            content = row[status]
-            
-            if pd.notna(content):
+    # Define the four columns
+    col_names = ["Task", "In Progress", "Done", "BrainStorm"]
+    columns = st.columns(4)
+
+    # For each column, display header, tasks, and a form to add a new task.
+    for idx, col in enumerate(columns):
+        col_name = col_names[idx]
+        with col:
+            st.header(col_name)
+            tasks = st.session_state.board[col_name]
+            for task in tasks:
                 with st.container():
-                    # Task container with border
-                    st.markdown("""
-                        <style>
-                        .task-container {
-                            border: 1px solid #ddd;
-                            padding: 10px;
-                            margin: 5px 0;
-                            border-radius: 5px;
-                        }
-                        </style>
-                    """, unsafe_allow_html=True)
-                    
-                    st.markdown(f'<div class="task-container">', unsafe_allow_html=True)
-                    
-                    # Check if task is authenticated
-                    if task_id not in st.session_state.authenticated_tasks:
-                        password = st.text_input(f"Password for task {task_id[:8]}", type="password", key=f"pwd_{task_id}")
-                        if st.button("Unlock", key=f"unlock_{task_id}"):
-                            if db.verify_password(table_number, task_id, password):
-                                st.session_state.authenticated_tasks.add(task_id)
-                                st.experimental_rerun()
-                            else:
-                                st.error("Incorrect password")
-                    else:
-                        # Display task content and controls
-                        st.write(content)
-                        
-                        # Move task buttons
-                        cols = st.columns(2)
-                        with cols[0]:
-                            new_status = st.selectbox(
-                                "Move to",
-                                [s for s in ["Task", "In Progress", "Done", "BrainStorm"] if s != status],
-                                key=f"move_{task_id}"
-                            )
-                        with cols[1]:
-                            if st.button("Move", key=f"btn_move_{task_id}"):
-                                if db.update_task_status(table_number, task_id, content, new_status):
-                                    st.success("Task moved successfully!")
-                                    st.experimental_rerun()
-                                else:
-                                    st.error("Failed to move task")
-                        
-                        # Delete task button
-                        if st.button("Delete", key=f"delete_{task_id}"):
-                            if st.button("Confirm Delete", key=f"confirm_delete_{task_id}"):
-                                if db.delete_task(table_number, task_id):
-                                    st.session_state.authenticated_tasks.remove(task_id)
-                                    st.success("Task deleted successfully!")
-                                    st.experimental_rerun()
-                                else:
-                                    st.error("Failed to delete task")
-                    
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()
+                    st.write(task)
+                    # Simulated “drag-and-drop”: select a target column to move the task
+                    target = st.selectbox(
+                        f"Move '{task}' to", 
+                        options=[n for n in col_names if n != col_name],
+                        key=f"move_{task}"
+                    )
+                    if st.button("Move", key=f"move_btn_{task}"):
+                        handle.move_task_in_board(st.session_state.table, 
+                                                    st.session_state.board, 
+                                                    col_name, target, task)
+                        st.success(f"Task moved to {target}.")
+                        st.experimental_rerun()
+                    # Delete button with confirmation
+                    if st.button("Delete", key=f"delete_{task}"):
+                        confirm = st.checkbox("Are you sure?", key=f"confirm_{task}")
+                        if confirm:
+                            handle.delete_task_from_board(st.session_state.table, 
+                                                            st.session_state.board, 
+                                                            col_name, task)
+                            st.success("Task deleted.")
+                            st.experimental_rerun()
+            # Form to add a new task in this column
+            new_task = st.text_input(f"Add new task to {col_name}", key=f"new_{col_name}")
+            if st.button(f"Add Task to {col_name}", key=f"add_{col_name}") and new_task:
+                handle.add_task_to_board(st.session_state.table, 
+                                         st.session_state.board, 
+                                         col_name, new_task)
+                st.success("Task added.")
+                st.experimental_rerun()
