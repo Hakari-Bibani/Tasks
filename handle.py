@@ -1,107 +1,105 @@
 import psycopg2
 import streamlit as st
-from datetime import datetime
-import pandas as pd
 
-class DatabaseHandler:
-    def __init__(self):
-        self.conn_string = (
-            f"postgresql://{st.secrets.postgres.user}:{st.secrets.postgres.password}@"
-            f"{st.secrets.postgres.host}/{st.secrets.postgres.database}?sslmode=require"
+def get_connection():
+    # Read connection string from Streamlit secrets
+    conn_str = st.secrets["postgres"]["CONNECTION_STRING"]
+    conn = psycopg2.connect(conn_str)
+    return conn
+
+def create_board(table, board_id, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""INSERT INTO {table} 
+            (id, password, Task, "In Progress", Done, BrainStorm)
+            VALUES (%s, %s, %s, %s, %s, %s)""",
+            (board_id, password, "", "", "", "")
         )
-    def get_connection(self):
-        return psycopg2.connect(self.conn_string)
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error creating board: {e}")
+    finally:
+        cur.close()
+        conn.close()
 
-    def create_task(self, table_number, task_id, password, content, status):
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO table{table_number} (id, password, Task, "In Progress", Done, BrainStorm)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (task_id, password, 
-                         content if status == "Task" else None,
-                         content if status == "In Progress" else None,
-                         content if status == "Done" else None,
-                         content if status == "BrainStorm" else None)
-                    )
-            return True
-        except Exception as e:
-            print(f"Error creating task: {e}")
-            return False
+def get_board(table, board_id, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""SELECT id, password, Task, "In Progress", Done, BrainStorm 
+            FROM {table} 
+            WHERE id = %s AND password = %s""",
+            (board_id, password)
+        )
+        row = cur.fetchone()
+        if row:
+            board = {
+                "id": row[0],
+                "password": row[1],
+                "Task": row[2].split("\n") if row[2] else [],
+                "In Progress": row[3].split("\n") if row[3] else [],
+                "Done": row[4].split("\n") if row[4] else [],
+                "BrainStorm": row[5].split("\n") if row[5] else []
+            }
+            return board
+        else:
+            return None
+    except Exception as e:
+        st.error(f"Error retrieving board: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
-    def get_tasks(self, table_number):
-        try:
-            with self.get_connection() as conn:
-                query = f"""
-                SELECT id, password, Task, "In Progress", Done, BrainStorm 
-                FROM table{table_number}
-                """
-                return pd.read_sql(query, conn)
-        except Exception as e:
-            print(f"Error fetching tasks: {e}")
-            return pd.DataFrame()
+def update_board(table, board):
+    # Join the list of tasks into newline-separated strings for storage
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        task_str = "\n".join(board["Task"])
+        in_progress_str = "\n".join(board["In Progress"])
+        done_str = "\n".join(board["Done"])
+        brainstorm_str = "\n".join(board["BrainStorm"])
+        cur.execute(
+            f"""UPDATE {table} 
+            SET Task = %s, "In Progress" = %s, Done = %s, BrainStorm = %s 
+            WHERE id = %s AND password = %s""",
+            (task_str, in_progress_str, done_str, brainstorm_str, board["id"], board["password"])
+        )
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error updating board: {e}")
+    finally:
+        cur.close()
+        conn.close()
 
-    def verify_password(self, table_number, task_id, password):
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        SELECT password FROM table{table_number}
-                        WHERE id = %s
-                        """,
-                        (task_id,)
-                    )
-                    stored_password = cur.fetchone()
-                    return stored_password and stored_password[0] == password
-        except Exception as e:
-            print(f"Error verifying password: {e}")
-            return False
+def add_task_to_board(table, board, column, task):
+    if column in board:
+        board[column].append(task)
+        update_board(table, board)
+    else:
+        st.error("Invalid column.")
 
-    def update_task_status(self, table_number, task_id, content, new_status):
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    # First, set all status columns to NULL
-                    cur.execute(
-                        f"""
-                        UPDATE table{table_number}
-                        SET Task = NULL, "In Progress" = NULL, Done = NULL, BrainStorm = NULL
-                        WHERE id = %s
-                        """,
-                        (task_id,)
-                    )
-                    
-                    # Then, update the appropriate status column
-                    status_column = new_status if new_status != "In Progress" else '"In Progress"'
-                    cur.execute(
-                        f"""
-                        UPDATE table{table_number}
-                        SET {status_column} = %s
-                        WHERE id = %s
-                        """,
-                        (content, task_id)
-                    )
-            return True
-        except Exception as e:
-            print(f"Error updating task status: {e}")
-            return False
+def move_task_in_board(table, board, from_column, to_column, task):
+    if from_column in board and to_column in board:
+        if task in board[from_column]:
+            board[from_column].remove(task)
+            board[to_column].append(task)
+            update_board(table, board)
+        else:
+            st.error("Task not found in the selected column.")
+    else:
+        st.error("Invalid column.")
 
-    def delete_task(self, table_number, task_id):
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        DELETE FROM table{table_number}
-                        WHERE id = %s
-                        """,
-                        (task_id,)
-                    )
-            return True
-        except Exception as e:
-            print(f"Error deleting task: {e}")
-            return False
+def delete_task_from_board(table, board, column, task):
+    if column in board:
+        if task in board[column]:
+            board[column].remove(task)
+            update_board(table, board)
+        else:
+            st.error("Task not found.")
+    else:
+        st.error("Invalid column.")
