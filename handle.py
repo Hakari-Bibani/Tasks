@@ -1,11 +1,14 @@
 import psycopg2
+import streamlit as st
 from datetime import datetime
 import pandas as pd
 
 class DatabaseHandler:
-    def __init__(self, connection_string):
-        self.conn_string = connection_string
-
+    def __init__(self):
+        self.conn_string = (
+            f"postgresql://{st.secrets.postgres.user}:{st.secrets.postgres.password}@"
+            f"{st.secrets.postgres.host}/{st.secrets.postgres.database}?sslmode=require"
+        )
     def get_connection(self):
         return psycopg2.connect(self.conn_string)
 
