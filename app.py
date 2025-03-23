@@ -4,6 +4,8 @@ from handle import DatabaseHandler
 import uuid
 
 # Initialize database handler
+db = DatabaseHandler()  # No need to pass connection string anymore
+# Initialize database handler
 CONNECTION_STRING = "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
 db = DatabaseHandler(CONNECTION_STRING)
 
