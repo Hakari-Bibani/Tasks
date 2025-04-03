@@ -1,3 +1,3 @@
-streamlit>=1.20
-streamlit-sortables>=0.1.0   # for drag-and-drop sortable lists
-psycopg2-binary>=2.9.6       # PostgreSQL driver (binary build for ease on Cloud)
+streamlit
+streamlit-sortables
+psycopg2-binary
