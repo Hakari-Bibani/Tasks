@@ -1,12 +1,9 @@
 import streamlit as st
 import pandas as pd
-from handler import create_board, get_tasks, update_task, delete_task
+from handler import DatabaseHandler
 
-# Initialize connection to the database
-db = st.experimental_connection("postgresql", type="sql")
-
-# Secrets management
-st.secrets.load_if_toml_exists()
+# Initialize database connection
+db_handler = DatabaseHandler()
 
 # Main Streamlit app
 def main():
@@ -17,7 +14,7 @@ def main():
     board_table = f"table{board.split()[-1]}"
 
     # Load tasks from the selected board
-    tasks = get_tasks(db, board_table)
+    tasks = db_handler.get_tasks(board_table)
 
     # Create columns
     col1, col2, col3, col4 = st.columns(4)
@@ -36,7 +33,7 @@ def main():
                 st.write(f"#### {task['task']}")
                 if st.button("Delete", key=f"delete_{task['id']}"):
                     if st.session_state.get(f"confirm_delete_{task['id']}"):
-                        delete_task(db, board_table, task['id'])
+                        db_handler.delete_task(board_table, task['id'])
                         st.experimental_rerun()
                     else:
                         st.session_state[f"confirm_delete_{task['id']}"] = True
@@ -47,7 +44,7 @@ def main():
     # Add new task
     new_task = st.text_input("Add a new task")
     if st.button("Add Task"):
-        create_board(db, board_table, new_task)
+        db_handler.add_task(board_table, new_task)
         st.experimental_rerun()
 
 if __name__ == "__main__":
