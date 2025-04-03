@@ -11,6 +11,9 @@ def init_session_state():
 
 def main():
     st.title("Task Management Board")
+    init_session_state()
+    
+    # Display current user
     st.sidebar.write(f"User: Hakari-Bibani")
     
     # Board selection
@@ -21,24 +24,25 @@ def main():
     if st.session_state.current_board:
         # Create columns for the board
         cols = st.columns(4)
-        columns = ['Task', 'In Progress', 'Done', 'BrainStorm']
+        columns = ['task', 'in progress', 'done', 'brainstorm']  # Changed to lowercase
+        display_names = ['Task', 'In Progress', 'Done', 'BrainStorm']  # For display purposes
         
         # Display each column
-        for i, column in enumerate(columns):
+        for i, (column, display_name) in enumerate(zip(columns, display_names)):
             with cols[i]:
-                st.subheader(column)
+                st.subheader(display_name)
                 
                 # Add new card
                 with st.container():
-                    new_task = st.text_area(f"New {column}", key=f"new_{column}_{uuid.uuid4()}")
+                    new_task = st.text_area(f"New {display_name}", key=f"new_{column}_{uuid.uuid4()}")
                     if st.button("Add", key=f"add_{column}_{uuid.uuid4()}"):
                         if new_task.strip():
                             data = {
                                 'id': str(uuid.uuid4()),
-                                'Task': new_task if column == 'Task' else None,
-                                'In Progress': new_task if column == 'In Progress' else None,
-                                'Done': new_task if column == 'Done' else None,
-                                'BrainStorm': new_task if column == 'BrainStorm' else None
+                                'task': new_task if column == 'task' else None,
+                                'in progress': new_task if column == 'in progress' else None,
+                                'done': new_task if column == 'done' else None,
+                                'brainstorm': new_task if column == 'brainstorm' else None
                             }
                             db.insert_card(st.session_state.current_board, data)
                             st.experimental_rerun()
@@ -78,6 +82,12 @@ def main():
         .stButton button {
             width: 100%;
             margin: 2px 0;
+        }
+        .container {
+            background-color: #f0f2f6;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
         }
         </style>
     """, unsafe_allow_html=True)
