@@ -1,96 +1,91 @@
 import streamlit as st
-import uuid
-from handler import DatabaseHandler
+import psycopg2
+import json
 
-# Initialize database handler
-db = DatabaseHandler()
+# --- Database Connection ---
+# (Use your connection string; ensure you protect credentials in production!)
+conn = psycopg2.connect(
+    "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+)
+cur = conn.cursor()
 
-def init_session_state():
-    if 'current_board' not in st.session_state:
-        st.session_state.current_board = None
+# --- Board (Table) Selection ---
+board = st.sidebar.selectbox("Select Board", ["table1", "table2", "table3", "table4", "table5", "table6"])
 
-def main():
-    st.title("Task Management Board")
-    init_session_state()
-    
-    # Display current user
-    st.sidebar.write(f"User: Hakari-Bibani")
-    
-    # Board selection
-    tables = ["table1", "table2", "table3", "table4", "table5", "table6"]
-    selected_board = st.selectbox("Select Board", tables)
-    st.session_state.current_board = selected_board
-
-    if st.session_state.current_board:
-        # Create columns for the board
-        cols = st.columns(4)
-        # Use the exact column names from your database
-        db_columns = ['Task', 'In Progress', 'Done', 'BrainStorm']
-        
-        # Display each column
-        for i, column in enumerate(db_columns):
-            with cols[i]:
-                st.subheader(column)
-                
-                # Add new card
-                with st.container():
-                    new_task = st.text_area(f"New {column}", key=f"new_{column}_{uuid.uuid4()}")
-                    if st.button("Add", key=f"add_{column}_{uuid.uuid4()}"):
-                        if new_task.strip():
-                            data = {
-                                'id': str(uuid.uuid4()),
-                                'Task': new_task if column == 'Task' else None,
-                                'In Progress': new_task if column == 'In Progress' else None,
-                                'Done': new_task if column == 'Done' else None,
-                                'BrainStorm': new_task if column == 'BrainStorm' else None
-                            }
-                            db.insert_card(st.session_state.current_board, data)
-                            st.experimental_rerun()
-                
-                # Display existing cards
-                cards = db.get_cards_for_column(st.session_state.current_board, column)
-                for card in cards:
-                    with st.container():
-                        col1, col2 = st.columns([5,1])
-                        with col1:
-                            updated_content = st.text_area(
-                                "",
-                                value=card[column],
-                                key=f"card_{card['id']}_{column}",
-                                on_change=lambda: db.update_card(
-                                    st.session_state.current_board,
-                                    card['id'],
-                                    column,
-                                    st.session_state[f"card_{card['id']}_{column}"]
-                                )
-                            )
-                        with col2:
-                            if st.button("🗑️", key=f"delete_{card['id']}"):
-                                if st.button("Confirm", key=f"confirm_{card['id']}"):
-                                    db.delete_card(st.session_state.current_board, card['id'])
-                                    st.experimental_rerun()
-
-    # Add CSS for better styling
-    st.markdown("""
-        <style>
-        .stTextArea textarea {
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            padding: 10px;
-            margin: 5px 0;
+# For simplicity, we assume each board has a single row with id='board'
+def load_board_data(table):
+    cur.execute(f"SELECT * FROM {table} WHERE id = 'board'")
+    row = cur.fetchone()
+    if row:
+        # Assume row columns are: id, Task, In Progress, Done, BrainStorm
+        return {
+            "Task": json.loads(row[1]) if row[1] else [],
+            "In Progress": json.loads(row[2]) if row[2] else [],
+            "Done": json.loads(row[3]) if row[3] else [],
+            "BrainStorm": json.loads(row[4]) if row[4] else [],
         }
-        .stButton button {
-            width: 100%;
-            margin: 2px 0;
-        }
-        .container {
-            background-color: #f0f2f6;
-            padding: 10px;
-            border-radius: 5px;
-            margin: 5px 0;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    else:
+        # If no row exists, create a new one with empty lists
+        empty_data = {"Task": [], "In Progress": [], "Done": [], "BrainStorm": []}
+        cur.execute(
+            f"INSERT INTO {table} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") VALUES ('board', %s, %s, %s, %s)",
+            (json.dumps(empty_data["Task"]), json.dumps(empty_data["In Progress"]),
+             json.dumps(empty_data["Done"]), json.dumps(empty_data["BrainStorm"]))
+        )
+        conn.commit()
+        return empty_data
 
-if __name__ == "__main__":
-    main()
+board_data = load_board_data(board)
+
+# --- Helper Function to Save Data ---
+def save_board_data(table, data):
+    cur.execute(
+        f"""UPDATE {table} 
+            SET "Task" = %s, "In Progress" = %s, "Done" = %s, "BrainStorm" = %s
+            WHERE id = 'board'""",
+        (json.dumps(data["Task"]), json.dumps(data["In Progress"]),
+         json.dumps(data["Done"]), json.dumps(data["BrainStorm"]))
+    )
+    conn.commit()
+
+# --- Display Columns & Cards ---
+st.write("## Task Board")
+
+# Create four columns for each status
+col1, col2, col3, col4 = st.columns(4)
+columns = {
+    "Task": col1,
+    "In Progress": col2,
+    "Done": col3,
+    "BrainStorm": col4
+}
+
+# For each status, display cards.
+# In a real app, you’d integrate a drag-and-drop component here.
+for status, col in columns.items():
+    with col:
+        st.subheader(status)
+        # Display each card in a container so you can later add drag-and-drop functionality.
+        # We use the index as part of the key.
+        for idx, card_text in enumerate(board_data[status]):
+            # Editable text area for the card
+            new_text = st.text_area(
+                label=f"{status} Card {idx+1}", 
+                value=card_text, 
+                key=f"{status}_{idx}"
+            )
+            # If text changed, update our local board data
+            if new_text != card_text:
+                board_data[status][idx] = new_text
+            # Delete button for the card
+            if st.button("🗑️", key=f"del_{status}_{idx}"):
+                board_data[status].pop(idx)
+                st.experimental_rerun()  # refresh the app to reflect deletion
+
+# --- Placeholder for Drag-and-Drop ---
+st.info("Drag-and-drop functionality is not built-in. To enable this, consider integrating a custom Streamlit component (e.g., one that wraps SortableJS or use streamlit-sortable).")
+
+# --- Save Button ---
+if st.button("Save Changes"):
+    save_board_data(board, board_data)
+    st.success("Board updated!")
