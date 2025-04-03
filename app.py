@@ -8,7 +8,7 @@ st.set_page_config(page_title="Kanban Board", layout="wide")
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
-# Login form for board selection and password
+# Login form for board selection and password (online mode)
 if not st.session_state["authenticated"]:
     st.title("Kanban Board Login")
     board_choice = st.selectbox("Select Board", ["Board 1", "Board 2", "Board 3", "Board 4", "Board 5", "Board 6"])
@@ -32,10 +32,10 @@ if st.session_state["authenticated"]:
     board_data = handler.get_board_data(board_table)
     # board_data is a dict with keys "Task", "In Progress", "Done", "BrainStorm"
     # Each value is a list of (id, text) tuples for cards in that column.
-    # Prepare data for drag-and-drop component (list of dicts per column)&#8203;:contentReference[oaicite:0]{index=0}
+    # Prepare data for the drag-and-drop component as a list of dicts.
     original_items = []
-    id_to_text = {}      # map card id to text
-    id_to_column = {}    # map card id to its current column
+    id_to_text = {}      # Map card id to text.
+    id_to_column = {}    # Map card id to its current column.
     for col_name, cards in board_data.items():
         texts = []
         for card_id, text in cards:
@@ -44,14 +44,15 @@ if st.session_state["authenticated"]:
             id_to_column[card_id] = col_name
         original_items.append({"header": col_name, "items": texts})
 
-    # Display the Kanban columns with draggable cards
+    # Display the Kanban columns with draggable cards.
     sorted_items = sort_items(original_items, multi_containers=True)
-    # If any card was moved between columns, update the database accordingly
+
+    # If any card was moved between columns, update the database accordingly.
     if sorted_items and sorted_items != original_items:
         for container in sorted_items:
             new_col = container["header"]
             for text in container["items"]:
-                # Find the card's id via its text
+                # Identify the card's id from its text.
                 card_id = None
                 for cid, txt in id_to_text.items():
                     if txt == text:
@@ -61,12 +62,11 @@ if st.session_state["authenticated"]:
                     continue
                 old_col = id_to_column.get(card_id)
                 if old_col and old_col != new_col:
-                    handler.update_card_column(board_table, card_id, old_col, new_col)
-        st.experimental_rerun()  # reload data to reflect changes
+                    handler.update_card_column(board_table, card_id, old_col, new_col, text)
+        st.experimental_rerun()  # Reload data to reflect changes.
 
-    # Handle card deletion with confirmation
+    # Handle card deletion with confirmation.
     if "confirm_delete" in st.session_state:
-        # Confirmation prompt in a modal dialog
         with st.dialog("Confirm Deletion"):
             card_id = st.session_state.confirm_delete
             st.write(f"Are you sure you want to delete this task: **{id_to_text.get(card_id, '')}**?")
@@ -80,7 +80,7 @@ if st.session_state["authenticated"]:
                 st.session_state.pop("confirm_delete", None)
                 st.experimental_rerun()
 
-    # Add a trash icon button for each card (displayed on the card)
+    # Add a trash icon button for each card.
     for col_name, cards in board_data.items():
         for card_id, text in cards:
             btn_label = f"🗑️ Delete {text}"
@@ -88,7 +88,7 @@ if st.session_state["authenticated"]:
                 st.session_state.confirm_delete = card_id
                 st.experimental_rerun()
 
-    # New task input
+    # Section to add a new task.
     st.markdown("---")
     st.subheader("Add New Task")
     new_text = st.text_input("Task description", key="new_task_text")
