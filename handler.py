@@ -21,7 +21,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS tasks (
                 id SERIAL PRIMARY KEY,
                 board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-                column TEXT NOT NULL,
+                "column" TEXT NOT NULL,
                 content TEXT NOT NULL,
                 position INTEGER NOT NULL
             );
@@ -57,7 +57,7 @@ def get_tasks(board_id):
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, column, content, position FROM tasks WHERE board_id=%s ORDER BY position;",
+            "SELECT id, \"column\", content, position FROM tasks WHERE board_id=%s ORDER BY position;",
             (board_id,)
         )
         rows = cur.fetchall()
@@ -70,13 +70,13 @@ def add_card(board_id, column, content):
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE board_id=%s AND column=%s;",
+            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE board_id=%s AND \"column\"=%s;",
             (board_id, column)
         )
         max_pos = cur.fetchone()[0]
         new_pos = max_pos + 1
         cur.execute(
-            "INSERT INTO tasks (board_id, column, content, position) VALUES (%s, %s, %s, %s);",
+            "INSERT INTO tasks (board_id, \"column\", content, position) VALUES (%s, %s, %s, %s);",
             (board_id, column, content, new_pos)
         )
 
@@ -89,6 +89,6 @@ def move_card(task_id, new_column, new_position):
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE tasks SET column=%s, position=%s WHERE id=%s;",
+            "UPDATE tasks SET \"column\"=%s, position=%s WHERE id=%s;",
             (new_column, new_position, task_id)
         )
