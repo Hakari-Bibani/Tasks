@@ -1,6 +1,6 @@
 import psycopg2
 import streamlit as st
-from typing import Dict, List
+import uuid
 
 class DatabaseHandler:
     def __init__(self):
@@ -22,7 +22,7 @@ class DatabaseHandler:
             st.error(f"Database connection error: {str(e)}")
             return None
     
-    def get_tasks(self, table_name: str) -> Dict[str, List[Dict]]:
+    def get_tasks(self, table_name: str) -> dict:
         """Get all tasks for a board"""
         conn = self.connect()
         tasks = {
@@ -53,13 +53,14 @@ class DatabaseHandler:
     def add_task(self, table_name: str, task: str):
         """Add a new task to a board"""
         conn = self.connect()
+        task_id = str(uuid.uuid4())
         if conn:
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(f"""
                         INSERT INTO {table_name} (id, task)
-                        VALUES (uuid_generate_v4(), %s)
-                    """, (task,))
+                        VALUES (%s, %s)
+                    """, (task_id, task))
                     conn.commit()
             finally:
                 conn.close()
