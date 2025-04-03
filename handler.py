@@ -1,94 +1,137 @@
-import streamlit as st
-from streamlit_sortables import sort_items
 import psycopg2
+from psycopg2.extras import RealDictCursor
+import pandas as pd
 
-@st.cache_resource
-def get_connection():
-    conn = psycopg2.connect(st.secrets["connections"]["neon"]["url"])
-    conn.autocommit = True
-    return conn
-
-def init_db():
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS boards (
-                id SERIAL PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id SERIAL PRIMARY KEY,
-                board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-                "column" TEXT NOT NULL,
-                content TEXT NOT NULL,
-                position INTEGER NOT NULL
-            );
-        """)
-
-def get_boards():
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, name FROM boards ORDER BY name;")
-        rows = cur.fetchall()
-        return [{"id": r[0], "name": r[1]} for r in rows]
-
-def add_board(name):
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO boards (name) VALUES (%s) ON CONFLICT (name) DO NOTHING RETURNING id;",
-                (name,)
-            )
-            result = cur.fetchone()
-            if result:
-                return result[0]
-            else:
-                cur.execute("SELECT id FROM boards WHERE name=%s;", (name,))
-                row = cur.fetchone()
-                return row[0] if row else None
-    except Exception as e:
-        st.error(f"Error adding board: {e}")
-        return None
-
-def get_tasks(board_id):
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, \"column\", content, position FROM tasks WHERE board_id=%s ORDER BY position;",
-            (board_id,)
-        )
-        rows = cur.fetchall()
-        return [
-            {"id": r[0], "column": r[1], "content": r[2], "position": r[3]}
-            for r in rows
-        ]
-
-def add_card(board_id, column, content):
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE board_id=%s AND \"column\"=%s;",
-            (board_id, column)
-        )
-        max_pos = cur.fetchone()[0]
-        new_pos = max_pos + 1
-        cur.execute(
-            "INSERT INTO tasks (board_id, \"column\", content, position) VALUES (%s, %s, %s, %s);",
-            (board_id, column, content, new_pos)
-        )
-
-def delete_card(task_id):
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM tasks WHERE id=%s;", (task_id,))
-
-def move_card(task_id, new_column, new_position):
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE tasks SET \"column\"=%s, position=%s WHERE id=%s;",
-            (new_column, new_position, task_id)
-        )
+class DatabaseHandler:
+    def __init__(self, db_url):
+        """
+        Initialize the database handler with connection details.
+        
+        Args:
+            db_url (str): PostgreSQL connection URL
+        """
+        self.db_url = db_url
+        self.test_connection()
+    
+    def test_connection(self):
+        """Test the database connection."""
+        try:
+            conn = psycopg2.connect(self.db_url)
+            conn.close()
+        except Exception as e:
+            raise Exception(f"Database connection failed: {e}")
+    
+    def get_connection(self):
+        """Create and return a database connection."""
+        return psycopg2.connect(self.db_url)
+    
+    def get_available_tables(self):
+        """Get list of available tables in the database."""
+        query = """
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_type = 'BASE TABLE'
+        ORDER BY table_name;
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                tables = [row[0] for row in cur.fetchall()]
+        
+        return tables
+    
+    def check_table_exists(self, table_name):
+        """Check if a table exists in the database."""
+        query = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = %s
+        );
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (table_name,))
+                exists = cur.fetchone()[0]
+        
+        return exists
+    
+    def get_all_tasks(self, table_name):
+        """Get all tasks from the specified table."""
+        query = f"""
+        SELECT id, "Task", "In Progress", "Done", "BrainStorm" 
+        FROM "{table_name}";
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(query)
+                tasks = cur.fetchall()
+        
+        return tasks
+    
+    def add_task(self, table_name, task_id, task_content):
+        """Add a new task to the specified table."""
+        query = f"""
+        INSERT INTO "{table_name}" (id, "Task", "In Progress", "Done", "BrainStorm")
+        VALUES (%s, %s, NULL, NULL, NULL);
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (task_id, task_content))
+            conn.commit()
+    
+    def move_task(self, table_name, task_id, target_column):
+        """Move a task to a different column in the specified table."""
+        # First, get the current task content
+        with self.get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f'SELECT * FROM "{table_name}" WHERE id = %s', (task_id,))
+                task = cur.fetchone()
+        
+        if task:
+            # Determine which column currently has content
+            content = None
+            current_column = None
+            
+            for col in ["Task", "In Progress", "Done", "BrainStorm"]:
+                if task[col]:
+                    content = task[col]
+                    current_column = col
+                    break
+            
+            if content and current_column:
+                # Update the task, moving it to the target column
+                with self.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Reset all columns
+                        reset_query = f"""
+                        UPDATE "{table_name}" 
+                        SET "Task" = NULL, "In Progress" = NULL, "Done" = NULL, "BrainStorm" = NULL
+                        WHERE id = %s
+                        """
+                        cur.execute(reset_query, (task_id,))
+                        
+                        # Set the target column
+                        update_query = f"""
+                        UPDATE "{table_name}" 
+                        SET "{target_column}" = %s
+                        WHERE id = %s
+                        """
+                        cur.execute(update_query, (content, task_id))
+                    conn.commit()
+    
+    def delete_task(self, table_name, task_id):
+        """Delete a task from the specified table."""
+        query = f"""
+        DELETE FROM "{table_name}" WHERE id = %s;
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (task_id,))
+            conn.commit()
