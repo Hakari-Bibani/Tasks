@@ -1,10 +1,9 @@
-import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 class DatabaseHandler:
-    def __init__(self):
-        self.conn_string = os.getenv('DATABASE_URL', "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require")
+    def __init__(self, connection_string):
+        self.conn_string = connection_string
         
     def get_connection(self):
         return psycopg2.connect(self.conn_string)
