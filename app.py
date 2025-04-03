@@ -1,35 +1,21 @@
 import streamlit as st
-import psycopg2
 import json
+from handle import get_connection
 
-# --- Database Connection ---
-# Use Streamlit secrets to keep your credentials secure.
-def get_connection():
-    # In Streamlit Cloud, add your connection string to the Secrets.
-    # For local testing, you can create a .streamlit/secrets.toml file.
-    connection_string = st.secrets["DATABASE_URL"] if "DATABASE_URL" in st.secrets else "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
-    try:
-        conn = psycopg2.connect(connection_string)
-        return conn
-    except Exception as e:
-        st.error("Error connecting to the database:")
-        st.error(e)
-        st.stop()
-
+# --- Establish Database Connection ---
 conn = get_connection()
 cur = conn.cursor()
 
-# --- Database Functions ---
+# --- Database Helper Functions ---
 def load_board_data(table):
     """
     Load board data from the given table.
-    Each board is stored in a row with id 'board'.
-    The columns store serialized JSON lists.
+    Assumes a row with id 'board' exists; if not, creates one.
     """
     cur.execute(f"SELECT * FROM {table} WHERE id = 'board'")
     row = cur.fetchone()
     if row:
-        # row structure: id, Task, In Progress, Done, BrainStorm
+        # Expected row order: id, Task, In Progress, Done, BrainStorm
         return {
             "Task": json.loads(row[1]) if row[1] else [],
             "In Progress": json.loads(row[2]) if row[2] else [],
@@ -39,7 +25,8 @@ def load_board_data(table):
     else:
         empty_data = {"Task": [], "In Progress": [], "Done": [], "BrainStorm": []}
         cur.execute(
-            f"INSERT INTO {table} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") VALUES ('board', %s, %s, %s, %s)",
+            f"""INSERT INTO {table} (id, "Task", "In Progress", "Done", "BrainStorm")
+                VALUES ('board', %s, %s, %s, %s)""",
             (json.dumps(empty_data["Task"]), json.dumps(empty_data["In Progress"]),
              json.dumps(empty_data["Done"]), json.dumps(empty_data["BrainStorm"]))
         )
@@ -59,19 +46,18 @@ def save_board_data(table, data):
     )
     conn.commit()
 
-# --- Streamlit Sidebar ---
+# --- Sidebar: Board Selection ---
 st.sidebar.title("Task Management Boards")
-# Allow users to select which board (table) to use.
 board = st.sidebar.selectbox("Select Board", ["table1", "table2", "table3", "table4", "table5", "table6"])
 
-# Load the board data for the selected table.
+# Load board data from the selected table.
 board_data = load_board_data(board)
 
-# --- Main App ---
+# --- Main App Interface ---
 st.title("Task Management Board")
-st.write("Edit the tasks in each column. Drag-and-drop functionality is not built-in. To enable that, integrate a custom component (e.g., streamlit-sortable).")
+st.write("Edit tasks in each column. (Note: Drag-and-drop functionality requires a custom component.)")
 
-# Create four columns for each status.
+# Create four columns for the main statuses.
 col1, col2, col3, col4 = st.columns(4)
 columns = {
     "Task": col1,
@@ -80,20 +66,20 @@ columns = {
     "BrainStorm": col4
 }
 
-# For each column, display its cards.
+# Render each column with its cards.
 for status, col in columns.items():
     with col:
         st.subheader(status)
-        # Iterate over the list of cards in this status.
+        # Display each card in the current status.
         for idx, card_text in enumerate(board_data[status]):
             new_text = st.text_area(label=f"{status} Card {idx+1}", value=card_text, key=f"{status}_{idx}")
             if new_text != card_text:
                 board_data[status][idx] = new_text
-            # Delete button for each card.
+            # Delete button for the card.
             if st.button("🗑️", key=f"del_{status}_{idx}"):
                 board_data[status].pop(idx)
                 st.experimental_rerun()
-        # Option to add a new card.
+        # Input to add a new card.
         new_card = st.text_input(f"Add new card to {status}", key=f"new_{status}")
         if st.button(f"Add Card to {status}", key=f"add_{status}"):
             if new_card:
@@ -105,4 +91,4 @@ if st.button("Save Changes"):
     save_board_data(board, board_data)
     st.success("Board updated!")
 
-st.info("Note: Drag-and-drop functionality is a placeholder. To enable it, integrate a custom component (e.g., one wrapping SortableJS).")
+st.info("Drag-and-drop functionality is not built-in. Consider integrating a custom component (e.g., streamlit-sortable) for that feature.")
