@@ -1,167 +1,29 @@
-import streamlit as st
-import psycopg2
-import os
+import pandas as pd
 
-class DatabaseHandler:
-    def __init__(self):
-        """Initialize database connection using Streamlit secrets or environment variables"""
-        self.conn = self._get_connection()
-    
-    def _get_connection(self):
-        """Establish database connection using secrets or environment variables"""
-        # Try to get connection string from Streamlit secrets
-        if hasattr(st, "secrets") and "postgres" in st.secrets:
-            # Using Streamlit secrets (preferred for deployment)
-            conn_string = st.secrets["postgres"]["url"]
+def create_board(db, table_name, task):
+    query = f"INSERT INTO {table_name} (task, in_progress, done, brainstorm) VALUES (%s, %s, %s, %s)"
+    db.query(query, params=(task, None, None, None))
+
+def get_tasks(db, table_name):
+    query = f"SELECT * FROM {table_name}"
+    df = db.query(query)
+    tasks = df.to_dict(orient="records")
+    result = {"Tasks": [], "In Progress": [], "Done": [], "BrainStorm": []}
+    for task in tasks:
+        if task["in_progress"]:
+            result["In Progress"].append(task)
+        elif task["done"]:
+            result["Done"].append(task)
+        elif task["brainstorm"]:
+            result["BrainStorm"].append(task)
         else:
-            # Fallback to environment variable or hardcoded for development
-            conn_string = os.environ.get(
-                "DATABASE_URL", 
-                "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
-            )
-        
-        try:
-            conn = psycopg2.connect(conn_string)
-            return conn
-        except Exception as e:
-            st.error(f"Database connection error: {e}")
-            return None
-    
-    def board_exists(self, table_name):
-        """Check if a board exists in the table"""
-        if not self.conn:
-            return False
-        
-        try:
-            cur = self.conn.cursor()
-            # Check if any rows exist in the table
-            cur.execute(f"SELECT COUNT(*) FROM {table_name}")
-            count = cur.fetchone()[0]
-            
-            cur.close()
-            return count > 0
-            
-        except Exception as e:
-            st.error(f"Error checking board: {e}")
-            return False
-    
-    def create_board(self, table_name):
-        """Create a new board"""
-        if not self.conn:
-            return False
-        
-        try:
-            cur = self.conn.cursor()
-            
-            # Delete any existing rows (clean slate)
-            cur.execute(f"DELETE FROM {table_name}")
-            
-            # Create initial board settings row
-            cur.execute(
-                f"INSERT INTO {table_name} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
-                f"VALUES (%s, %s, %s, %s, %s)",
-                ("settings", None, None, None, None)
-            )
-            
-            self.conn.commit()
-            cur.close()
-            return True
-            
-        except Exception as e:
-            st.error(f"Board creation error: {e}")
-            return False
-    
-    def get_all_tasks(self, table_name):
-        """Get all tasks from the board"""
-        if not self.conn:
-            return []
-        
-        try:
-            cur = self.conn.cursor()
-            cur.execute(
-                f"SELECT id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\" FROM {table_name} WHERE id != 'settings'"
-            )
-            tasks = []
-            for row in cur.fetchall():
-                tasks.append({
-                    "id": row[0],
-                    "Task": row[1],
-                    "In Progress": row[2],
-                    "Done": row[3],
-                    "BrainStorm": row[4]
-                })
-            
-            cur.close()
-            return tasks
-            
-        except Exception as e:
-            st.error(f"Error fetching tasks: {e}")
-            return []
-    
-    def add_task(self, table_name, task_id, task=None, in_progress=None, done=None, brainstorm=None):
-        """Add a new task to the board"""
-        if not self.conn:
-            return False
-        
-        try:
-            cur = self.conn.cursor()
-            
-            # Insert new task
-            cur.execute(
-                f"INSERT INTO {table_name} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
-                f"VALUES (%s, %s, %s, %s, %s)",
-                (task_id, task, in_progress, done, brainstorm)
-            )
-            
-            self.conn.commit()
-            cur.close()
-            return True
-            
-        except Exception as e:
-            st.error(f"Error adding task: {e}")
-            return False
-    
-    def move_task(self, table_name, task_id, from_column, to_column):
-        """Move a task from one column to another"""
-        if not self.conn:
-            return False
-        
-        try:
-            cur = self.conn.cursor()
-            
-            # Get the task content
-            cur.execute(f"SELECT \"{from_column}\" FROM {table_name} WHERE id = %s", (task_id,))
-            task_content = cur.fetchone()[0]
-            
-            # Update the task
-            cur.execute(
-                f"UPDATE {table_name} SET \"{from_column}\" = NULL, \"{to_column}\" = %s WHERE id = %s",
-                (task_content, task_id)
-            )
-            
-            self.conn.commit()
-            cur.close()
-            return True
-            
-        except Exception as e:
-            st.error(f"Error moving task: {e}")
-            return False
-    
-    def delete_task(self, table_name, task_id):
-        """Delete a task from the board"""
-        if not self.conn:
-            return False
-        
-        try:
-            cur = self.conn.cursor()
-            
-            # Delete the task
-            cur.execute(f"DELETE FROM {table_name} WHERE id = %s", (task_id,))
-            
-            self.conn.commit()
-            cur.close()
-            return True
-            
-        except Exception as e:
-            st.error(f"Error deleting task: {e}")
-            return False
+            result["Tasks"].append(task)
+    return result
+
+def update_task(db, table_name, task_id, new_column):
+    query = f"UPDATE {table_name} SET {new_column} = %s WHERE id = %s"
+    db.query(query, params=(True, task_id))
+
+def delete_task(db, table_name, task_id):
+    query = f"DELETE FROM {table_name} WHERE id = %s"
+    db.query(query, params=(task_id,))
