@@ -1,16 +1,14 @@
 import streamlit as st
+from streamlit_sortables import sort_items
 import psycopg2
 
-# Singleton connection to the Postgres database
-@st.experimental_singleton
+@st.cache_resource
 def get_connection():
-    # Connect using the URL from Streamlit secrets
     conn = psycopg2.connect(st.secrets["connections"]["neon"]["url"])
-    conn.autocommit = True  # enable auto-commit for convenience
+    conn.autocommit = True
     return conn
 
 def init_db():
-    """Create boards and tasks tables if they do not exist."""
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute("""
@@ -30,7 +28,6 @@ def init_db():
         """)
 
 def get_boards():
-    """Return a list of all boards as dicts: {"id": ..., "name": ...}."""
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute("SELECT id, name FROM boards ORDER BY name;")
@@ -38,21 +35,17 @@ def get_boards():
         return [{"id": r[0], "name": r[1]} for r in rows]
 
 def add_board(name):
-    """Add a new board with the given name. Returns the board id, or None if not created."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO boards (name) VALUES (%s) "
-                "ON CONFLICT (name) DO NOTHING RETURNING id;",
+                "INSERT INTO boards (name) VALUES (%s) ON CONFLICT (name) DO NOTHING RETURNING id;",
                 (name,)
             )
             result = cur.fetchone()
             if result:
-                # New board created
                 return result[0]
             else:
-                # Board name already exists, fetch its id
                 cur.execute("SELECT id FROM boards WHERE name=%s;", (name,))
                 row = cur.fetchone()
                 return row[0] if row else None
@@ -61,12 +54,10 @@ def add_board(name):
         return None
 
 def get_tasks(board_id):
-    """Fetch all tasks for the given board, as a list of dicts."""
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, column, content, position FROM tasks "
-            "WHERE board_id=%s ORDER BY position;",
+            "SELECT id, column, content, position FROM tasks WHERE board_id=%s ORDER BY position;",
             (board_id,)
         )
         rows = cur.fetchall()
@@ -75,14 +66,9 @@ def get_tasks(board_id):
             for r in rows
         ]
 
-# Alias for clarity – fetching board data (tasks) 
-fetch_board_data = get_tasks
-
 def add_card(board_id, column, content):
-    """Insert a new task into the given board/column with the next position index."""
     conn = get_connection()
     with conn.cursor() as cur:
-        # Find the highest position in this column to determine the new card's position
         cur.execute(
             "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE board_id=%s AND column=%s;",
             (board_id, column)
@@ -95,13 +81,11 @@ def add_card(board_id, column, content):
         )
 
 def delete_card(task_id):
-    """Delete the task with the given id."""
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM tasks WHERE id=%s;", (task_id,))
 
 def move_card(task_id, new_column, new_position):
-    """Update task's column and position (used for drag-and-drop reordering)."""
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
