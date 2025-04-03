@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from handler import DatabaseHandler
+import uuid
 
 # Initialize database connection
 db_handler = DatabaseHandler()
