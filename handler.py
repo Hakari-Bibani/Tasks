@@ -1,90 +1,67 @@
+import uuid
 import psycopg2
-from psycopg2.extras import DictCursor
+import streamlit as st
 
-# Database connection
-def get_db_connection():
-    return psycopg2.connect(
-        "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+# Retrieve the database connection URL from Streamlit secrets
+DB_URL = st.secrets["connections"]["neon"]["url"]  # expects secrets.toml with [connections.neon] section
+
+def get_board_data(board_table):
+    """Fetch all tasks for the given board (table) and categorize them by column."""
+    conn = psycopg2.connect(DB_URL, sslmode='require')
+    cur = conn.cursor()
+    cur.execute(f'SELECT id, "Task", "In Progress", "Done", "BrainStorm" FROM {board_table};')
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    # Separate tasks by their current column
+    tasks, in_progress, done, brainstorm = [], [], [], []
+    for (id_val, task, in_prog, done_val, brainstorm_val) in rows:
+        if task not in (None, ""):
+            tasks.append((id_val, task))
+        if in_prog not in (None, ""):
+            in_progress.append((id_val, in_prog))
+        if done_val not in (None, ""):
+            done.append((id_val, done_val))
+        if brainstorm_val not in (None, ""):
+            brainstorm.append((id_val, brainstorm_val))
+    return tasks, in_progress, done, brainstorm
+
+def add_card(board_table, column, content):
+    """Add a new task card to the specified column of the board."""
+    new_id = str(uuid.uuid4())  # generate a unique ID for the new card
+    # Prepare values for each column (only the target column gets the content)
+    col_names = ["Task", "In Progress", "Done", "BrainStorm"]
+    values = [None, None, None, None]
+    if column in col_names:
+        values[col_names.index(column)] = content
+    else:
+        values[0] = content  # default to "Task" if column name is unexpected
+    conn = psycopg2.connect(DB_URL, sslmode='require')
+    cur = conn.cursor()
+    cur.execute(
+        f'INSERT INTO {board_table} (id, "Task", "In Progress", "Done", "BrainStorm") VALUES (%s, %s, %s, %s, %s);',
+        [new_id] + values
     )
+    conn.commit()
+    cur.close()
+    conn.close()
 
-# Create a new board (table)
-def create_board(board_name):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {board_name} (
-                    id SERIAL PRIMARY KEY,
-                    column_name TEXT NOT NULL,
-                    content TEXT NOT NULL
-                )
-                """
-            )
-            conn.commit()
-    finally:
-        conn.close()
+def move_card(board_table, card_id, from_col, to_col, content):
+    """Move an existing card from one column to another by updating its fields."""
+    conn = psycopg2.connect(DB_URL, sslmode='require')
+    cur = conn.cursor()
+    # Set the new column to the content and clear the old column
+    query = f'UPDATE {board_table} SET "{to_col}" = %s, "{from_col}" = NULL WHERE id = %s;'
+    cur.execute(query, (content, card_id))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-# Get all boards (tables)
-def list_boards():
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-            """)
-            return [row[0] for row in cur.fetchall()]
-    finally:
-        conn.close()
-
-# Get data for a specific board
-def get_board_data(board_name):
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(f"SELECT * FROM {board_name}")
-            rows = cur.fetchall()
-            data = {"Tasks": {}, "In Progress": {}, "Done": {}, "BrainStorm": {}}
-            for row in rows:
-                data[row["column_name"]][row["id"]] = row["content"]
-            return data
-    finally:
-        conn.close()
-
-# Add a new card
-def add_card(board_name, column_name, content):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"INSERT INTO {board_name} (column_name, content) VALUES (%s, %s)",
-                (column_name, content),
-            )
-            conn.commit()
-    finally:
-        conn.close()
-
-# Delete a card
-def delete_card(board_name, card_id):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"DELETE FROM {board_name} WHERE id = %s", (card_id,))
-            conn.commit()
-    finally:
-        conn.close()
-
-# Move a card between columns
-def move_card(board_name, card_id, new_column):
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE {board_name} SET column_name = %s WHERE id = %s",
-                (new_column, card_id),
-            )
-            conn.commit()
-    finally:
-        conn.close()
+def delete_card(board_table, card_id):
+    """Delete a task card from the board."""
+    conn = psycopg2.connect(DB_URL, sslmode='require')
+    cur = conn.cursor()
+    cur.execute(f'DELETE FROM {board_table} WHERE id = %s;', (card_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
