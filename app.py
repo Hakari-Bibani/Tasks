@@ -1,73 +1,90 @@
 import streamlit as st
-import uuid
-from handler import add_card, move_card, delete_card, get_all_cards
+import pandas as pd
+import handler as db
+from streamlit_sortables import sort_items
 
-# 初始化看板
-def init_board():
-    board_id = st.session_state.get("board_id", str(uuid.uuid4()))
-    st.session_state.board_id = board_id
-    return board_id
+# Page config
+st.set_page_config(layout="wide")
 
-# 主应用
 def main():
-    st.title("Task Management Board")
+    st.title("Kanban Board Task Management")
     
-    # 初始化看板
-    board_id = init_board()
+    # Initialize session state for board management
+    if 'boards' not in st.session_state:
+        st.session_state.boards = db.get_all_boards()
+    if 'current_board' not in st.session_state:
+        st.session_state.current_board = None
     
-    # 创建4列
-    columns = st.columns(4)
-    columns[0].header("Tasks")
-    columns[1].header("In Progress")
-    columns[2].header("Done")
-    columns[3].header("BrainStorm")
+    # Board selection sidebar
+    with st.sidebar:
+        st.header("Board Management")
+        new_board_name = st.text_input("Create New Board")
+        if st.button("Create Board"):
+            if new_board_name:
+                db.create_board(new_board_name)
+                st.session_state.boards = db.get_all_boards()
+                st.rerun()
+        
+        st.divider()
+        st.subheader("Select Board")
+        for board in st.session_state.boards:
+            if st.button(board, key=f"board_{board}"):
+                st.session_state.current_board = board
     
-    # 获取所有卡片
-    cards = get_all_cards(board_id)
+    # Main board interface
+    if st.session_state.current_board:
+        display_board(st.session_state.current_board)
+    else:
+        st.info("Please select or create a board from the sidebar")
+
+def display_board(board_name):
+    st.header(f"Board: {board_name}")
     
-    # 按状态分组卡片
-    grouped_cards = {
-        "Task": [],
-        "In Progress": [],
-        "Done": [],
-        "BrainStorm": []
+    # Get current board data
+    board_data = db.get_board_data(board_name)
+    
+    # Prepare data for sortable items
+    columns = {
+        "Task": {"items": [], "title": "Tasks"},
+        "In Progress": {"items": [], "title": "In Progress"},
+        "Done": {"items": [], "title": "Done"},
+        "BrainStorm": {"items": [], "title": "BrainStorm"}
     }
     
-    for card in cards:
-        grouped_cards[card["status"]].append(card)
+    # Populate columns with existing items
+    for _, row in board_data.iterrows():
+        for col in columns:
+            if row[col]:
+                columns[col]["items"].append({
+                    "id": row['id'],
+                    "content": row[col]
+                })
     
-    # 显示卡片并处理拖拽
-    for i, status in enumerate(["Task", "In Progress", "Done", "BrainStorm"]):
-        with columns[i]:
-            for card in grouped_cards[status]:
-                # 显示卡片内容
-                card_container = st.empty()
-                card_container.write(f"**{card['content']}**")
-                
-                # 删除按钮
-                delete_btn = st.button("🗑️", key=f"delete_{card['id']}")
-                if delete_btn:
-                    if st.confirmation_dialog("Confirm Delete", "Are you sure you want to delete this card?"):
-                        delete_card(card["id"])
-                        st.rerun()
-                
-                # 拖拽功能
-                new_status = st.selectbox(
-                    "Move to",
-                    ["Task", "In Progress", "Done", "BrainStorm"],
-                    index=["Task", "In Progress", "Done", "BrainStorm"].index(status),
-                    key=f"move_{card['id']}",
-                    label_visibility="collapsed"
-                )
-                
-                if new_status != status:
-                    move_card(card["id"], new_status)
-                    st.rerun()
-            
-            # 添加新卡片
-            new_content = st.text_input("Add new card", key=f"add_{status}")
-            if st.button("Add", key=f"add_btn_{status}") and new_content:
-                add_card(board_id, new_content, status)
+    # Create sortable columns
+    sortable_items = [
+        {"header": columns[col]["title"], "items": columns[col]["items"]} 
+        for col in columns
+    ]
+    
+    # Display the sortable board
+    changed = sort_items(sortable_items, multi_containers=True, direction="horizontal")
+    
+    # Handle changes (drag and drop)
+    if changed:
+        db.clear_board(board_name)
+        for column in changed:
+            col_name = column["header"]
+            if col_name == "Tasks": col_name = "Task"
+            for item in column["items"]:
+                db.add_task_to_board(board_name, item["id"], item["content"], col_name)
+    
+    # Add new task
+    with st.expander("Add New Task"):
+        new_task_col = st.selectbox("Column", ["Task", "In Progress", "Done", "BrainStorm"])
+        new_task_content = st.text_area("Task Content")
+        if st.button("Add Task"):
+            if new_task_content:
+                db.add_task_to_board(board_name, str(pd.Timestamp.now().value), new_task_content, new_task_col)
                 st.rerun()
 
 if __name__ == "__main__":
