@@ -1,15 +1,16 @@
 import streamlit as st
 from handler import DatabaseHandler
 import time
-from datetime import datetime
 import uuid
 
-# Initialize database handler
-db = DatabaseHandler()
+# Initialize database handler with the direct connection string
+db = DatabaseHandler(connection_string="postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require")
 
 def init_session_state():
     if 'current_board' not in st.session_state:
         st.session_state.current_board = None
+    if 'user' not in st.session_state:
+        st.session_state.user = "Hakari-Bibani"
 
 def create_card(column, table_name):
     card_id = str(uuid.uuid4())
@@ -44,6 +45,9 @@ def main():
     st.title("Task Management Board")
     init_session_state()
 
+    # Display current user
+    st.sidebar.write(f"User: {st.session_state.user}")
+
     # Board selection
     tables = ["table1", "table2", "table3", "table4", "table5", "table6"]
     selected_board = st.selectbox("Select Board", tables)
@@ -74,10 +78,17 @@ def main():
             border-radius: 5px;
             padding: 10px;
             margin: 5px 0;
+            background-color: white;
         }
         .stButton button {
             width: 100%;
             margin: 2px 0;
+        }
+        .container {
+            background-color: #f0f2f6;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 5px 0;
         }
         </style>
         """, unsafe_allow_html=True)
