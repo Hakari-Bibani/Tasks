@@ -1,6 +1,6 @@
 import streamlit as st
 import handler as db
-from streamlit_draggable_list import draggable_list
+from streamlit_sortables import sort_items
 import uuid
 
 # Initialize database
@@ -44,36 +44,58 @@ if st.session_state.current_board:
     # Get board data
     board_data = db.get_board_data(st.session_state.current_board)
     
-    # Create columns
-    cols = st.columns(4)
-    column_names = ["Task", "In Progress", "Done", "BrainStorm"]
+    # Prepare columns for drag-and-drop
+    columns = {
+        "Task": {"items": [], "title": "Tasks"},
+        "In Progress": {"items": [], "title": "In Progress"},
+        "Done": {"items": [], "title": "Done"},
+        "BrainStorm": {"items": [], "title": "BrainStorm"}
+    }
     
-    for i, col in enumerate(cols):
-        with col:
-            st.subheader(column_names[i])
-            
-            # Get tasks for this column
-            tasks = []
-            if not board_data.empty:
-                tasks = board_data[column_names[i]].dropna().tolist()
-            
-            # Display draggable list
-            if tasks:
-                new_order = draggable_list(tasks)
-                if new_order != tasks:
-                    db.update_column_tasks(st.session_state.current_board, column_names[i], new_order)
-            
-            # Add new task
-            with st.expander("➕ Add Task"):
-                new_task = st.text_input("Task content", key=f"new_{column_names[i]}")
-                if st.button("Add", key=f"add_{column_names[i]}"):
-                    if new_task:
-                        db.add_task(
-                            board_name=st.session_state.current_board,
-                            task_id=str(uuid.uuid4()),
-                            content=new_task,
-                            column=column_names[i]
-                        )
-                        st.rerun()
+    # Populate columns with existing items
+    for _, row in board_data.iterrows():
+        for col in columns:
+            if row[col]:
+                columns[col]["items"].append({
+                    "id": row['id'],
+                    "content": row[col]
+                })
+    
+    # Create sortable columns
+    sortable_items = [
+        {"header": columns[col]["title"], "items": columns[col]["items"]} 
+        for col in columns
+    ]
+    
+    # Display the sortable board
+    changed = sort_items(sortable_items, multi_containers=True, direction="horizontal")
+    
+    # Handle changes (drag and drop)
+    if changed:
+        db.clear_board(st.session_state.current_board)
+        for column in changed:
+            col_name = column["header"]
+            if col_name == "Tasks": col_name = "Task"
+            for item in column["items"]:
+                db.add_task_to_board(
+                    st.session_state.current_board,
+                    item["id"],
+                    item["content"],
+                    col_name
+                )
+    
+    # Add new task
+    with st.expander("Add New Task"):
+        new_task_col = st.selectbox("Column", ["Task", "In Progress", "Done", "BrainStorm"])
+        new_task_content = st.text_area("Task Content")
+        if st.button("Add Task"):
+            if new_task_content:
+                db.add_task_to_board(
+                    st.session_state.current_board,
+                    str(uuid.uuid4()),
+                    new_task_content,
+                    new_task_col
+                )
+                st.rerun()
 else:
     st.info("Please select or create a board from the sidebar")
