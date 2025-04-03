@@ -1,84 +1,90 @@
 import psycopg2
-import streamlit as st
+from psycopg2.extras import DictCursor
 
-class DatabaseHandler:
-    def __init__(self):
-        self.conn = psycopg2.connect(
-            host=st.secrets["db_host"],
-            database=st.secrets["db_name"],
-            user=st.secrets["db_user"],
-            password=st.secrets["db_password"],
-            sslmode=st.secrets["sslmode"]
-        )
-        self.create_initial_tables()
+# Database connection
+def get_db_connection():
+    return psycopg2.connect(
+        "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+    )
 
-    def create_initial_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS boards (
-                id SERIAL PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL
+# Create a new board (table)
+def create_board(board_name):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {board_name} (
+                    id SERIAL PRIMARY KEY,
+                    column_name TEXT NOT NULL,
+                    content TEXT NOT NULL
+                )
+                """
             )
-        """)
-        self.conn.commit()
-        cursor.close()
+            conn.commit()
+    finally:
+        conn.close()
 
-    def create_board(self, board_name):
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS "{board_name}" (
-                id TEXT PRIMARY KEY,
-                column_name TEXT NOT NULL,
-                content TEXT NOT NULL
+# Get all boards (tables)
+def list_boards():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            """)
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+# Get data for a specific board
+def get_board_data(board_name):
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute(f"SELECT * FROM {board_name}")
+            rows = cur.fetchall()
+            data = {"Tasks": {}, "In Progress": {}, "Done": {}, "BrainStorm": {}}
+            for row in rows:
+                data[row["column_name"]][row["id"]] = row["content"]
+            return data
+    finally:
+        conn.close()
+
+# Add a new card
+def add_card(board_name, column_name, content):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO {board_name} (column_name, content) VALUES (%s, %s)",
+                (column_name, content),
             )
-        """)
-        cursor.execute("INSERT INTO boards (name) VALUES (%s)", (board_name,))
-        self.conn.commit()
-        cursor.close()
+            conn.commit()
+    finally:
+        conn.close()
 
-    def get_all_boards(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT name FROM boards")
-        boards = [row[0] for row in cursor.fetchall()]
-        cursor.close()
-        return boards
+# Delete a card
+def delete_card(board_name, card_id):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {board_name} WHERE id = %s", (card_id,))
+            conn.commit()
+    finally:
+        conn.close()
 
-    def add_card(self, board_name, column_name, content):
-        import uuid
-        card_id = str(uuid.uuid4())
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            INSERT INTO "{board_name}" (id, column_name, content)
-            VALUES (%s, %s, %s)
-        """, (card_id, column_name, content))
-        self.conn.commit()
-        cursor.close()
-
-    def get_cards(self, board_name, column_name):
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            SELECT id, content FROM "{board_name}"
-            WHERE column_name = %s
-        """, (column_name,))
-        cards = {row[0]: row[1] for row in cursor.fetchall()}
-        cursor.close()
-        return cards
-
-    def move_card(self, board_name, card_id, new_column):
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            UPDATE "{board_name}"
-            SET column_name = %s
-            WHERE id = %s
-        """, (new_column, card_id))
-        self.conn.commit()
-        cursor.close()
-
-    def delete_card(self, board_name, card_id):
-        cursor = self.conn.cursor()
-        cursor.execute(f"""
-            DELETE FROM "{board_name}"
-            WHERE id = %s
-        """, (card_id,))
-        self.conn.commit()
-        cursor.close()
+# Move a card between columns
+def move_card(board_name, card_id, new_column):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {board_name} SET column_name = %s WHERE id = %s",
+                (new_column, card_id),
+            )
+            conn.commit()
+    finally:
+        conn.close()
