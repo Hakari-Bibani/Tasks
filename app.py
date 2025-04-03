@@ -1,125 +1,321 @@
 import streamlit as st
-from streamlit_sortables import sort_items
-import handler
+import pandas as pd
+import uuid
+from handler import DatabaseHandler
+import streamlit.components.v1 as components
+import os
 
-# Initialize database (create tables if not exist)
-handler.init_db()
+# Set page configuration
+st.set_page_config(
+    page_title="Task Board Manager",
+    page_icon="📋",
+    layout="wide",
+)
 
-st.title("Kanban Board")
+# Initialize database handler
+db_handler = None
 
-# Fetch available boards
-boards = handler.get_boards()
+# Custom CSS for styling
+st.markdown("""
+<style>
+    .card {
+        padding: 10px;
+        border-radius: 5px;
+        margin: 5px 0;
+        background-color: white;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        position: relative;
+    }
+    .column {
+        background-color: #f5f5f5;
+        border-radius: 5px;
+        padding: 10px;
+        min-height: 400px;
+    }
+    .delete-btn {
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        cursor: pointer;
+        color: #FF5252;
+    }
+    .board-selector {
+        max-width: 300px;
+        margin-bottom: 20px;
+    }
+    .header {
+        text-align: center;
+        padding: 10px;
+        background-color: #4CAF50;
+        color: white;
+        border-radius: 5px 5px 0 0;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# If no boards, prompt to create the first board
-if not boards:
-    st.subheader("No boards available. Create a new board:")
-    new_board_name = st.text_input("Board name", key="new_board_name")
-    if st.button("Create Board"):
-        if new_board_name.strip():
-            new_id = handler.add_board(new_board_name.strip())
-            if new_id:
-                st.success(f"Board '{new_board_name}' created!")
-                # Select the new board and refresh
-                st.session_state.selected_board = new_board_name.strip()
-                st.experimental_rerun()
+# Connect to database
+def initialize_db():
+    global db_handler
+    
+    # Get database URL from secrets
+    if 'db_url' in st.secrets:
+        db_url = st.secrets['db_url']
+    else:
+        db_url = os.environ.get('DATABASE_URL')
+        if not db_url:
+            db_url = st.text_input("Enter database URL:", type="password", 
+                                  help="Example: postgresql://user:password@host/dbname?sslmode=require")
+            if not db_url:
+                st.warning("Please provide a database URL to continue.")
+                return False
+    
+    try:
+        db_handler = DatabaseHandler(db_url)
+        return True
+    except Exception as e:
+        st.error(f"Failed to connect to database: {e}")
+        return False
+
+# Generate draggable card component
+def create_draggable_card(item_id, content, column, board_table):
+    card_html = f"""
+    <div class="card" draggable="true" ondragstart="dragStart(event, '{item_id}')">
+        <div class="delete-btn" onclick="confirmDelete('{item_id}')">🗑️</div>
+        {content}
+    </div>
+    """
+    return card_html
+
+# Create JavaScript for drag and drop functionality
+def get_drag_drop_script():
+    return """
+    <script>
+        function dragStart(event, id) {
+            event.dataTransfer.setData("text/plain", id);
+        }
+        
+        function allowDrop(event) {
+            event.preventDefault();
+        }
+        
+        function drop(event, target_column) {
+            event.preventDefault();
+            const id = event.dataTransfer.getData("text/plain");
+            const data = {
+                id: id,
+                target_column: target_column
+            };
+            
+            // Send data to Streamlit via component communication
+            window.parent.postMessage({
+                type: "card_dropped",
+                data: data
+            }, "*");
+        }
+        
+        function confirmDelete(id) {
+            if (confirm("Are you sure you want to delete this card?")) {
+                window.parent.postMessage({
+                    type: "delete_card",
+                    data: { id: id }
+                }, "*");
+            }
+        }
+    </script>
+    """
+
+# Create a new board
+def create_new_board():
+    global db_handler
+
+    if st.session_state.new_board_name:
+        # Get selected table
+        table_name = st.session_state.selected_table
+        
+        if table_name:
+            # Check if table exists and is accessible
+            if db_handler.check_table_exists(table_name):
+                st.session_state.boards[st.session_state.new_board_name] = table_name
+                st.session_state.selected_board = st.session_state.new_board_name
+                st.session_state.new_board_name = ""
+                st.success(f"Board '{st.session_state.selected_board}' created successfully!")
             else:
-                st.warning(f"Board '{new_board_name}' already exists. Please use a different name.")
+                st.error(f"Table '{table_name}' does not exist or is not accessible.")
         else:
-            st.warning("Please enter a valid board name.")
-    st.stop()  # Stop here until a board is created
-
-# Board selection
-board_names = [b["name"] for b in boards]
-# Ensure a valid selected_board in session_state
-if "selected_board" not in st.session_state or st.session_state.selected_board not in board_names:
-    st.session_state.selected_board = board_names[0]
-selected_board = st.selectbox("Select Board", board_names, index=board_names.index(st.session_state.selected_board), key="selected_board")
-
-# Section to add a new board (when at least one board exists already)
-st.write("### Add a New Board")
-new_board = st.text_input("New board name", value="", key="new_board_input")
-if st.button("Create Board", key="create_board_btn"):
-    if new_board.strip():
-        new_id = handler.add_board(new_board.strip())
-        if new_id:
-            st.success(f"Board '{new_board}' created!")
-            # Auto-select the newly created board
-            st.session_state.selected_board = new_board.strip()
-            st.experimental_rerun()
-        else:
-            st.warning(f"Board '{new_board}' already exists.")
+            st.error("Please select a table for the board.")
     else:
-        st.warning("Board name cannot be empty.")
+        st.error("Please enter a board name.")
 
-# Refresh boards list (in case a new board was added)
-boards = handler.get_boards()
-current_board = next((b for b in boards if b["name"] == st.session_state.selected_board), None)
-current_board_id = current_board["id"] if current_board else None
+# Main application
+def main():
+    if not initialize_db():
+        return
+    
+    # Initialize session state
+    if 'boards' not in st.session_state:
+        st.session_state.boards = {}
+    
+    if 'selected_board' not in st.session_state:
+        st.session_state.selected_board = None
+    
+    if 'new_board_name' not in st.session_state:
+        st.session_state.new_board_name = ""
+    
+    # Header
+    st.title("Task Board Manager")
+    
+    # Create new board interface
+    with st.expander("Create New Board"):
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.text_input("Board Name", key="new_board_name")
+            
+            # Get available tables
+            available_tables = db_handler.get_available_tables()
+            st.session_state.selected_table = st.selectbox(
+                "Select Table", 
+                options=available_tables,
+                key="selected_table"
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Create Board"):
+                create_new_board()
+    
+    # Board selection
+    if st.session_state.boards:
+        st.markdown("### Select Board")
+        board_options = list(st.session_state.boards.keys())
+        selected_board = st.selectbox(
+            "Choose a board", 
+            options=board_options,
+            key="board_selector"
+        )
+        
+        if selected_board != st.session_state.selected_board:
+            st.session_state.selected_board = selected_board
+    
+    # Display the selected board
+    if st.session_state.selected_board:
+        display_board(st.session_state.selected_board, st.session_state.boards[st.session_state.selected_board])
+    else:
+        st.info("Please create or select a board to continue.")
 
-# Section to add a new card
-st.write("### Add a New Card")
-new_card_text = st.text_input("Card title", value="", key="new_card_text")
-new_card_col = st.selectbox("Add to column", ["Tasks", "In Progress", "Done", "BrainStorm"], index=0, key="new_card_col")
-if st.button("Add Card", key="add_card_btn"):
-    if new_card_text.strip():
-        handler.add_card(current_board_id, new_card_col, new_card_text.strip())
-        st.success(f"Added card to **{new_card_col}**.")
-        # Clear the input and refresh to show the new card
-        st.session_state.new_card_text = ""
+# Display board with columns and cards
+def display_board(board_name, table_name):
+    st.markdown(f"## {board_name}")
+    
+    # Get data from the database
+    data = db_handler.get_all_tasks(table_name)
+    
+    # Create columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    # Set up column headers
+    col1.markdown('<div class="header">Tasks</div>', unsafe_allow_html=True)
+    col2.markdown('<div class="header">In Progress</div>', unsafe_allow_html=True)
+    col3.markdown('<div class="header">Done</div>', unsafe_allow_html=True)
+    col4.markdown('<div class="header">BrainStorm</div>', unsafe_allow_html=True)
+    
+    # Add card functionality
+    with col1:
+        new_task = st.text_area("Add new task", key="new_task", placeholder="Enter task description...")
+        if st.button("Add Task"):
+            if new_task:
+                new_id = str(uuid.uuid4())
+                db_handler.add_task(table_name, new_id, new_task)
+                st.experimental_rerun()
+    
+    # Display JavaScript for drag-and-drop
+    js_code = get_drag_drop_script()
+    components.html(js_code, height=0)
+    
+    # Handle drag-and-drop events
+    card_dropped = get_card_dropped_message()
+    if card_dropped:
+        card_id = card_dropped["id"]
+        target_column = card_dropped["target_column"]
+        db_handler.move_task(table_name, card_id, target_column)
         st.experimental_rerun()
-    else:
-        st.warning("Card title cannot be empty.")
+    
+    # Handle delete card events
+    delete_card = get_delete_card_message()
+    if delete_card:
+        card_id = delete_card["id"]
+        db_handler.delete_task(table_name, card_id)
+        st.experimental_rerun()
+    
+    # Display tasks in columns
+    with col1:
+        st.markdown('<div class="column" ondragover="allowDrop(event)" ondrop="drop(event, \'Task\')">', unsafe_allow_html=True)
+        for item in data:
+            if item["Task"]:
+                st.markdown(create_draggable_card(item["id"], item["Task"], "Task", table_name), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown('<div class="column" ondragover="allowDrop(event)" ondrop="drop(event, \'In Progress\')">', unsafe_allow_html=True)
+        for item in data:
+            if item["In Progress"]:
+                st.markdown(create_draggable_card(item["id"], item["In Progress"], "In Progress", table_name), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown('<div class="column" ondragover="allowDrop(event)" ondrop="drop(event, \'Done\')">', unsafe_allow_html=True)
+        for item in data:
+            if item["Done"]:
+                st.markdown(create_draggable_card(item["id"], item["Done"], "Done", table_name), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown('<div class="column" ondragover="allowDrop(event)" ondrop="drop(event, \'BrainStorm\')">', unsafe_allow_html=True)
+        for item in data:
+            if item["BrainStorm"]:
+                st.markdown(create_draggable_card(item["id"], item["BrainStorm"], "BrainStorm", table_name), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# Fetch all cards for the current board from the database
-tasks = handler.get_tasks(current_board_id)
+# Get custom messages from frontend
+def get_card_dropped_message():
+    if "card_dropped" in st.session_state:
+        data = st.session_state.card_dropped
+        del st.session_state.card_dropped
+        return data
+    return None
 
-# Section to delete a card
-st.write("### Delete a Card")
-if tasks:
-    # List cards as "[ID] title" for unique identification
-    options = [f"[{t['id']}] {t['content']}" for t in tasks]
-    delete_choice = st.selectbox("Select card to delete", options, key="delete_choice")
-    if st.button("Delete Card", key="delete_card_btn"):
-        if delete_choice:
-            # Parse the selected "[ID] title" to get the ID
-            task_id = int(delete_choice.split("]")[0].strip("["))
-            handler.delete_card(task_id)
-            st.success("Card deleted.")
-            st.experimental_rerun()
-else:
-    st.write("_No cards to delete._")
+def get_delete_card_message():
+    if "delete_card" in st.session_state:
+        data = st.session_state.delete_card
+        del st.session_state.delete_card
+        return data
+    return None
 
-# Prepare data for the draggable board columns
-COLUMNS = ["Tasks", "In Progress", "Done", "BrainStorm"]
-# Group tasks by column name
-col_items = {col: [] for col in COLUMNS}
-for t in tasks:
-    col_items[t["column"]].append(t)
-# Sort tasks within each column by their position
-for col in COLUMNS:
-    col_items[col].sort(key=lambda x: x["position"])
-# Build the data structure for streamlit-sortables
-original_items = [
-    {"header": col, "items": [f"[{t['id']}] {t['content']}" for t in col_items[col]]}
-    for col in COLUMNS
-]
+# Initialize component communication
+components.html(
+    """
+    <script>
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'card_dropped') {
+                window.parent.postMessage({
+                    type: 'streamlit:setComponentValue',
+                    value: event.data.data,
+                    key: 'card_dropped'
+                }, '*');
+            }
+            else if (event.data.type === 'delete_card') {
+                window.parent.postMessage({
+                    type: 'streamlit:setComponentValue',
+                    value: event.data.data,
+                    key: 'delete_card'
+                }, '*');
+            }
+        });
+    </script>
+    """,
+    height=0
+)
 
-# Render the sortable multi-column board (draggable cards)
-sorted_items = sort_items(original_items, multi_containers=True, key=f"board-{current_board_id}")
-
-# If the user dragged/dropped cards, update positions in the database
-if sorted_items != original_items:
-    # Create a lookup of original positions for each task id
-    orig_positions = {t["id"]: (t["column"], t["position"]) for t in tasks}
-    # Loop through each container (column) in the new order
-    for container in sorted_items:
-        col_name = container["header"]
-        for pos, item in enumerate(container["items"]):
-            # Each item is "[ID] title"
-            item_id = int(item.split("]")[0].strip("["))
-            orig_col, orig_pos = orig_positions.get(item_id, (None, None))
-            # If column or position changed, update the task in DB
-            if orig_col != col_name or orig_pos != pos:
-                handler.move_card(item_id, col_name, pos)
-    # After updating all changes, refresh the app to reflect new order
-    st.experimental_rerun()
+if __name__ == "__main__":
+    main()
