@@ -3,154 +3,150 @@ import pandas as pd
 import streamlit as st
 from psycopg2 import sql
 
-class DatabaseHandler:
-    def __init__(self):
-        self.conn = None
-    
-    def get_connection(self):
-        if not self.conn or self.conn.closed:
-            self.conn = psycopg2.connect(st.secrets["db_connection"])
-        return self.conn
-    
-    def init_db(self):
-        """Initialize database tables"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                # Create boards table if not exists
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS boards (
-                        id SERIAL PRIMARY KEY,
-                        name TEXT UNIQUE NOT NULL
-                    );
-                """)
-                
-                # Create tasks table if not exists
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id TEXT PRIMARY KEY,
-                        board_name TEXT NOT NULL,
-                        task_column TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        position INTEGER
-                    );
-                """)
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-    
-    def get_all_boards(self):
-        """Get all board names"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT name FROM boards ORDER BY name;")
-                return [row[0] for row in cur.fetchall()]
-        except Exception as e:
-            st.error(f"Database error: {str(e)}")
-            return []
-    
-    def create_board(self, board_name):
-        """Create a new board"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO boards (name) VALUES (%s) ON CONFLICT DO NOTHING;",
-                    (board_name,)
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-    
-    def get_board_data(self, board_name):
-        """Get all tasks for a board as a dataframe"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT task_column, content 
-                    FROM tasks 
-                    WHERE board_name = %s
-                    ORDER BY position;
-                """, (board_name,))
-                
-                # Convert to dataframe with columns as separate columns
-                data = cur.fetchall()
-                if not data:
-                    return pd.DataFrame(columns=["Task", "In Progress", "Done", "BrainStorm"])
-                
-                df = pd.DataFrame(data, columns=["column", "content"])
-                pivoted = df.pivot(columns="column", values="content")
-                return pivoted.reindex(columns=["Task", "In Progress", "Done", "BrainStorm"])
-        except Exception as e:
-            st.error(f"Database error: {str(e)}")
-            return pd.DataFrame()
-    
-    def add_task(self, board_name, task_id, content, column):
-        """Add a new task to a board"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                # Get current max position for this column
-                cur.execute("""
-                    SELECT COALESCE(MAX(position), 0) 
-                    FROM tasks 
-                    WHERE board_name = %s AND task_column = %s;
-                """, (board_name, column))
-                position = cur.fetchone()[0] + 1
-                
-                # Insert new task
-                cur.execute("""
-                    INSERT INTO tasks (id, board_name, task_column, content, position)
-                    VALUES (%s, %s, %s, %s, %s);
-                """, (task_id, board_name, column, content, position))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-    
-    def update_column_tasks(self, board_name, column_name, tasks):
-        """Update all tasks for a specific column"""
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                # Delete existing tasks for this column
-                cur.execute("""
-                    DELETE FROM tasks 
-                    WHERE board_name = %s AND task_column = %s;
-                """, (board_name, column_name))
-                
-                # Insert updated tasks with new positions
-                for position, content in enumerate(tasks, 1):
-                    cur.execute("""
-                        INSERT INTO tasks (id, board_name, task_column, content, position)
-                        VALUES (%s, %s, %s, %s, %s);
-                    """, (str(uuid.uuid4()), board_name, column_name, content, position))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
+def get_connection():
+    return psycopg2.connect(st.secrets["db_connection"])
 
-# Create single instance
-db = DatabaseHandler()
-
-# Helper functions for Streamlit
 def init_db():
-    db.init_db()
+    """Initialize database tables"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Create board mapping table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS board_mapping (
+                    board_name TEXT PRIMARY KEY,
+                    table_name TEXT UNIQUE NOT NULL
+                );
+            """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Database initialization error: {str(e)}")
+    finally:
+        conn.close()
 
 def get_all_boards():
-    return db.get_all_boards()
+    """Get all board names"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT board_name FROM board_mapping ORDER BY board_name;")
+            return [row[0] for row in cur.fetchall()]
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        return []
+    finally:
+        conn.close()
 
 def create_board(board_name):
-    db.create_board(board_name)
+    """Create a new board with its own table"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Create a unique table name
+            table_name = f"board_{board_name.lower().replace(' ', '_')}"
+            
+            # Create the board table
+            cur.execute(sql.SQL("""
+                CREATE TABLE {} (
+                    id TEXT PRIMARY KEY,
+                    "Task" TEXT,
+                    "In Progress" TEXT,
+                    "Done" TEXT,
+                    "BrainStorm" TEXT
+                );
+            """).format(sql.Identifier(table_name)))
+            
+            # Add to board mapping
+            cur.execute("""
+                INSERT INTO board_mapping (board_name, table_name)
+                VALUES (%s, %s);
+            """, (board_name, table_name))
+            
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error creating board: {str(e)}")
+    finally:
+        conn.close()
 
 def get_board_data(board_name):
-    return db.get_board_data(board_name)
+    """Get all tasks for a board"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Get the table name for this board
+            cur.execute("""
+                SELECT table_name FROM board_mapping WHERE board_name = %s;
+            """, (board_name,))
+            table_name = cur.fetchone()[0]
+            
+            # Get all tasks from the board's table
+            cur.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table_name)))
+            columns = [desc[0] for desc in cur.description]
+            data = cur.fetchall()
+            
+            return pd.DataFrame(data, columns=columns)
+    except Exception as e:
+        st.error(f"Error getting board data: {str(e)}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
-def add_task(board_name, task_id, content, column):
-    db.add_task(board_name, task_id, content, column)
+def add_task_to_board(board_name, task_id, content, column):
+    """Add a task to a specific column in a board"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Get the table name for this board
+            cur.execute("""
+                SELECT table_name FROM board_mapping WHERE board_name = %s;
+            """, (board_name,))
+            table_name = cur.fetchone()[0]
+            
+            # Clear the task from all columns first
+            cur.execute(sql.SQL("""
+                INSERT INTO {} (id, "Task", "In Progress", "Done", "BrainStorm")
+                VALUES (%s, '', '', '', '')
+                ON CONFLICT (id) DO UPDATE SET
+                    "Task" = '',
+                    "In Progress" = '',
+                    "Done" = '',
+                    "BrainStorm" = '';
+            """).format(sql.Identifier(table_name)), (task_id,))
+            
+            # Update the specific column
+            cur.execute(sql.SQL("""
+                UPDATE {} SET "{}" = %s WHERE id = %s;
+            """).format(
+                sql.Identifier(table_name),
+                sql.Identifier(column)
+            ), (content, task_id))
+            
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error adding task: {str(e)}")
+    finally:
+        conn.close()
 
-def update_column_tasks(board_name, column_name, tasks):
-    db.update_column_tasks(board_name, column_name, tasks)
+def clear_board(board_name):
+    """Clear all tasks from a board"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Get the table name for this board
+            cur.execute("""
+                SELECT table_name FROM board_mapping WHERE board_name = %s;
+            """, (board_name,))
+            table_name = cur.fetchone()[0]
+            
+            # Clear the table
+            cur.execute(sql.SQL("TRUNCATE TABLE {}").format(sql.Identifier(table_name)))
+            
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error clearing board: {str(e)}")
+    finally:
+        conn.close()
