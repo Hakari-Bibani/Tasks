@@ -24,25 +24,25 @@ def main():
     if st.session_state.current_board:
         # Create columns for the board
         cols = st.columns(4)
-        columns = ['task', 'in progress', 'done', 'brainstorm']  # Changed to lowercase
-        display_names = ['Task', 'In Progress', 'Done', 'BrainStorm']  # For display purposes
+        # Use the exact column names from your database
+        db_columns = ['Task', 'In Progress', 'Done', 'BrainStorm']
         
         # Display each column
-        for i, (column, display_name) in enumerate(zip(columns, display_names)):
+        for i, column in enumerate(db_columns):
             with cols[i]:
-                st.subheader(display_name)
+                st.subheader(column)
                 
                 # Add new card
                 with st.container():
-                    new_task = st.text_area(f"New {display_name}", key=f"new_{column}_{uuid.uuid4()}")
+                    new_task = st.text_area(f"New {column}", key=f"new_{column}_{uuid.uuid4()}")
                     if st.button("Add", key=f"add_{column}_{uuid.uuid4()}"):
                         if new_task.strip():
                             data = {
                                 'id': str(uuid.uuid4()),
-                                'task': new_task if column == 'task' else None,
-                                'in progress': new_task if column == 'in progress' else None,
-                                'done': new_task if column == 'done' else None,
-                                'brainstorm': new_task if column == 'brainstorm' else None
+                                'Task': new_task if column == 'Task' else None,
+                                'In Progress': new_task if column == 'In Progress' else None,
+                                'Done': new_task if column == 'Done' else None,
+                                'BrainStorm': new_task if column == 'BrainStorm' else None
                             }
                             db.insert_card(st.session_state.current_board, data)
                             st.experimental_rerun()
