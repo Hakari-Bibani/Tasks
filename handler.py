@@ -11,8 +11,8 @@ class DatabaseHandler:
     def get_cards_for_column(self, table_name, column):
         with self.get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Use the exact column name from the database
-                cur.execute(f'SELECT * FROM {table_name} WHERE {column} IS NOT NULL')
+                # Use properly quoted column name
+                cur.execute(f'SELECT * FROM {table_name} WHERE "{column}" IS NOT NULL')
                 return cur.fetchall()
 
     def get_cards(self, table_name):
@@ -24,7 +24,7 @@ class DatabaseHandler:
     def insert_card(self, table_name, data):
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                columns = ', '.join(data.keys())
+                columns = ', '.join(f'"{k}"' for k in data.keys())
                 placeholders = ', '.join(['%s'] * len(data))
                 query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
                 cur.execute(query, list(data.values()))
@@ -33,13 +33,13 @@ class DatabaseHandler:
     def update_card(self, table_name, card_id, column, new_value):
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                # Clear all columns first and update the specific column
+                # Update query with proper column name quoting
                 update_query = f'''
                     UPDATE {table_name} 
-                    SET task = CASE WHEN %s = 'task' THEN %s ELSE NULL END,
-                        "in progress" = CASE WHEN %s = 'in progress' THEN %s ELSE NULL END,
-                        done = CASE WHEN %s = 'done' THEN %s ELSE NULL END,
-                        brainstorm = CASE WHEN %s = 'brainstorm' THEN %s ELSE NULL END
+                    SET "Task" = CASE WHEN %s = 'Task' THEN %s ELSE NULL END,
+                        "In Progress" = CASE WHEN %s = 'In Progress' THEN %s ELSE NULL END,
+                        "Done" = CASE WHEN %s = 'Done' THEN %s ELSE NULL END,
+                        "BrainStorm" = CASE WHEN %s = 'BrainStorm' THEN %s ELSE NULL END
                     WHERE id = %s
                 '''
                 cur.execute(update_query, (column, new_value, column, new_value, column, new_value, column, new_value, card_id))
