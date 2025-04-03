@@ -1,113 +1,206 @@
-import psycopg2
-import uuid
 import streamlit as st
+import psycopg2
+import os
+import hashlib
 
-def get_connection():
-    # The connection string is stored in Streamlit secrets.
-    conn_str = st.secrets["postgresql"]["connection_string"]
-    conn = psycopg2.connect(conn_str)
-    return conn
-
-def get_tasks(table_name):
-    """Fetch all tasks from the given table.
-    Assumes that for each row only one of the four board columns is non-null."""
-    conn = get_connection()
-    cur = conn.cursor()
-    query = f'''SELECT id, password, "Task", "In Progress", "Done", "BrainStorm"
-                FROM {table_name}'''
-    cur.execute(query)
-    rows = cur.fetchall()
-    tasks = []
-    for row in rows:
-        task_id, password, task, in_progress, done, brainstorm = row
-        if task:
-            status = "Task"
-            content = task
-        elif in_progress:
-            status = "In Progress"
-            content = in_progress
-        elif done:
-            status = "Done"
-            content = done
-        elif brainstorm:
-            status = "BrainStorm"
-            content = brainstorm
-        else:
-            status = "Task"
-            content = ""
-        tasks.append({
-            "id": task_id,
-            "password": password,
-            "status": status,
-            "content": content
-        })
-    cur.close()
-    conn.close()
-    return tasks
-
-def add_task(table_name, content, password, status):
-    """Insert a new task into the table. Only the column matching the status gets the content."""
-    conn = get_connection()
-    cur = conn.cursor()
-    task_id = str(uuid.uuid4())
-    # Set content in the correct column, NULL in others.
-    values = (
-        task_id,
-        password,
-        content if status == "Task" else None,
-        content if status == "In Progress" else None,
-        content if status == "Done" else None,
-        content if status == "BrainStorm" else None,
-    )
-    sql = f'''INSERT INTO {table_name} 
-              (id, password, "Task", "In Progress", "Done", "BrainStorm")
-              VALUES (%s, %s, %s, %s, %s, %s)'''
-    cur.execute(sql, values)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def delete_task(table_name, task_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(f"DELETE FROM {table_name} WHERE id = %s", (task_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def update_task_position(table_name, task_id, new_status):
-    """Change the column where the card’s content is stored.
-    This function finds the current column (non-null) and moves the content to new_status."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(f'''SELECT "Task", "In Progress", "Done", "BrainStorm" 
-                    FROM {table_name} WHERE id = %s''', (task_id,))
-    row = cur.fetchone()
-    content = None
-    current_status = None
-    if row:
-        col_names = ["Task", "In Progress", "Done", "BrainStorm"]
-        for idx, val in enumerate(row):
-            if val is not None:
-                content = val
-                current_status = col_names[idx]
-                break
-    if content is None:
-        cur.close()
-        conn.close()
-        return
-    # Define mapping to properly quote columns (for names with spaces)
-    columns = {"Task": "\"Task\"",
-               "In Progress": "\"In Progress\"",
-               "Done": "Done",
-               "BrainStorm": "BrainStorm"}
-    old_col = columns.get(current_status, "\"Task\"")
-    new_col = columns.get(new_status, "\"Task\"")
+class DatabaseHandler:
+    def __init__(self):
+        """Initialize database connection using Streamlit secrets or environment variables"""
+        self.conn = self._get_connection()
     
-    sql = f'''UPDATE {table_name} 
-              SET {old_col} = NULL, {new_col} = %s 
-              WHERE id = %s'''
-    cur.execute(sql, (content, task_id))
-    conn.commit()
-    cur.close()
-    conn.close()
+    def _get_connection(self):
+        """Establish database connection using secrets or environment variables"""
+        # Try to get connection string from Streamlit secrets
+        if hasattr(st, "secrets") and "postgres" in st.secrets:
+            # Using Streamlit secrets (preferred for deployment)
+            conn_string = st.secrets["postgres"]["url"]
+        else:
+            # Fallback to environment variable or hardcoded for development
+            conn_string = os.environ.get(
+                "DATABASE_URL", 
+                "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+            )
+        
+        try:
+            conn = psycopg2.connect(conn_string)
+            return conn
+        except Exception as e:
+            st.error(f"Database connection error: {e}")
+            return None
+    
+    def _hash_password(self, password):
+        """Create a SHA-256 hash of the password"""
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    def authenticate_board(self, table_name, password):
+        """Authenticate access to a board with the given password"""
+        if not self.conn:
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            # Check if any rows exist in the table
+            cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count = cur.fetchone()[0]
+            
+            if count == 0:
+                # Table is empty, no board exists yet
+                return False
+            
+            # Check if password matches
+            hashed_password = self._hash_password(password)
+            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
+            match_count = cur.fetchone()[0]
+            
+            cur.close()
+            return match_count > 0
+            
+        except Exception as e:
+            st.error(f"Authentication error: {e}")
+            return False
+    
+    def create_board(self, table_name, password):
+        """Create a new board with the given password"""
+        if not self.conn:
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            
+            # Delete any existing rows (clean slate)
+            cur.execute(f"DELETE FROM {table_name}")
+            
+            # Create initial board settings row
+            hashed_password = self._hash_password(password)
+            cur.execute(
+                f"INSERT INTO {table_name} (id, password, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
+                f"VALUES (%s, %s, %s, %s, %s, %s)",
+                ("settings", hashed_password, None, None, None, None)
+            )
+            
+            self.conn.commit()
+            cur.close()
+            return True
+            
+        except Exception as e:
+            st.error(f"Board creation error: {e}")
+            return False
+    
+    def get_all_tasks(self, table_name, password):
+        """Get all tasks from the board"""
+        if not self.conn:
+            return []
+        
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                f"SELECT id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\" FROM {table_name} WHERE id != 'settings'"
+            )
+            tasks = []
+            for row in cur.fetchall():
+                tasks.append({
+                    "id": row[0],
+                    "Task": row[1],
+                    "In Progress": row[2],
+                    "Done": row[3],
+                    "BrainStorm": row[4]
+                })
+            
+            cur.close()
+            return tasks
+            
+        except Exception as e:
+            st.error(f"Error fetching tasks: {e}")
+            return []
+    
+    def add_task(self, table_name, password, task_id, task=None, in_progress=None, done=None, brainstorm=None):
+        """Add a new task to the board"""
+        if not self.conn:
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            
+            # Verify password first
+            hashed_password = self._hash_password(password)
+            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
+            if cur.fetchone()[0] == 0:
+                st.error("Invalid password")
+                cur.close()
+                return False
+            
+            # Insert new task
+            cur.execute(
+                f"INSERT INTO {table_name} (id, password, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
+                f"VALUES (%s, %s, %s, %s, %s, %s)",
+                (task_id, hashed_password, task, in_progress, done, brainstorm)
+            )
+            
+            self.conn.commit()
+            cur.close()
+            return True
+            
+        except Exception as e:
+            st.error(f"Error adding task: {e}")
+            return False
+    
+    def move_task(self, table_name, password, task_id, from_column, to_column):
+        """Move a task from one column to another"""
+        if not self.conn:
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            
+            # Verify password first
+            hashed_password = self._hash_password(password)
+            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
+            if cur.fetchone()[0] == 0:
+                st.error("Invalid password")
+                cur.close()
+                return False
+            
+            # Get the task content
+            cur.execute(f"SELECT \"{from_column}\" FROM {table_name} WHERE id = %s", (task_id,))
+            task_content = cur.fetchone()[0]
+            
+            # Update the task
+            cur.execute(
+                f"UPDATE {table_name} SET \"{from_column}\" = NULL, \"{to_column}\" = %s WHERE id = %s",
+                (task_content, task_id)
+            )
+            
+            self.conn.commit()
+            cur.close()
+            return True
+            
+        except Exception as e:
+            st.error(f"Error moving task: {e}")
+            return False
+    
+    def delete_task(self, table_name, password, task_id):
+        """Delete a task from the board"""
+        if not self.conn:
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            
+            # Verify password first
+            hashed_password = self._hash_password(password)
+            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
+            if cur.fetchone()[0] == 0:
+                st.error("Invalid password")
+                cur.close()
+                return False
+            
+            # Delete the task
+            cur.execute(f"DELETE FROM {table_name} WHERE id = %s", (task_id,))
+            
+            self.conn.commit()
+            cur.close()
+            return True
+            
+        except Exception as e:
+            st.error(f"Error deleting task: {e}")
+            return False
