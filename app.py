@@ -2,8 +2,8 @@ import streamlit as st
 import uuid
 from handler import DatabaseHandler
 
-# Initialize database handler with direct connection string
-db = DatabaseHandler(connection_string="postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require")
+# Initialize database handler
+db = DatabaseHandler()
 
 def init_session_state():
     if 'current_board' not in st.session_state:
