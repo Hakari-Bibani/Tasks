@@ -1,53 +1,81 @@
 import streamlit as st
-from streamlit_dragndrop import dragndrop
-from handler import DatabaseHandler
+from handler import (
+    create_board,
+    get_board_data,
+    add_card,
+    delete_card,
+    move_card,
+    list_boards,
+)
 
-# Initialize database handler
-db_handler = DatabaseHandler()
+# Page Configuration
+st.set_page_config(page_title="Task Management App", layout="wide")
 
-# Sidebar for board management
-st.sidebar.header("Task Boards")
-boards = db_handler.get_all_boards()
-selected_board = st.sidebar.selectbox("Select Board", boards)
+# Initialize session state for board selection
+if "current_board" not in st.session_state:
+    st.session_state.current_board = None
 
-if st.sidebar.button("Create New Board"):
-    new_board_name = st.sidebar.text_input("Enter Board Name")
-    if st.sidebar.button("Create") and new_board_name:
-        db_handler.create_board(new_board_name)
-        st.experimental_rerun()
+# Sidebar: Board Selection
+st.sidebar.title("Boards")
+boards = list_boards()
+board_name = st.sidebar.selectbox("Select a Board", ["Create New Board"] + boards)
 
-# Main application
-st.title(f"Task Board: {selected_board}")
+if board_name == "Create New Board":
+    new_board_name = st.sidebar.text_input("Enter New Board Name")
+    if st.sidebar.button("Create"):
+        if new_board_name.strip():
+            create_board(new_board_name)
+            st.sidebar.success(f"Board '{new_board_name}' created!")
+            st.experimental_rerun()
+        else:
+            st.sidebar.error("Board name cannot be empty.")
+else:
+    st.session_state.current_board = board_name
 
-# Create columns
-columns = st.columns(4)
-column_names = ["Tasks", "In Progress", "Done", "BrainStorm"]
+# Main Content
+if st.session_state.current_board:
+    st.title(f"Board: {st.session_state.current_board}")
 
-# Create drag and drop interface
-with dragndrop(columns, ["Tasks", "In Progress", "Done", "BrainStorm"]) as dnd:
-    for col_idx, col_name in enumerate(column_names):
-        cards = db_handler.get_cards(selected_board, col_name)
-        with columns[col_idx]:
-            st.header(col_name)
-            for card_id, content in cards.items():
-                with st.expander(content, expanded=False):
-                    st.write(content)
-                    if st.button("🗑️", key=f"delete_{card_id}"):
-                        if st.confirmation("Are you sure you want to delete this card?"):
-                            db_handler.delete_card(selected_board, card_id)
+    # Fetch data for the current board
+    board_data = get_board_data(st.session_state.current_board)
+
+    # Define columns for the board interface
+    col_tasks, col_in_progress, col_done, col_brainstorm = st.columns(4)
+
+    # Helper function to render cards in a column
+    def render_column(column_key, column_name):
+        with column_key:
+            st.subheader(column_name)
+            for card_id, content in board_data.get(column_name, {}).items():
+                with st.expander(content):
+                    st.markdown(f"**ID:** {card_id}")
+                    if st.button(f"Delete {card_id}", key=f"delete_{card_id}"):
+                        if st.session_state.get(f"confirm_delete_{card_id}", False):
+                            delete_card(st.session_state.current_board, card_id)
+                            st.success("Card deleted!")
                             st.experimental_rerun()
-            
-            # Add new card
-            new_card_content = st.text_area(f"Add new card to {col_name}", key=f"new_{col_name}")
-            if st.button(f"Add to {col_name}", key=f"add_{col_name}"):
-                if new_card_content:
-                    db_handler.add_card(selected_board, col_name, new_card_content)
-                    st.experimental_rerun()
+                        else:
+                            st.warning("Are you sure?")
+                            if st.button("Yes", key=f"confirm_{card_id}"):
+                                st.session_state[f"confirm_delete_{card_id}"] = True
+                                st.experimental_rerun()
 
-# Handle drag and drop
-if dnd:
-    card_id = dnd["card_id"]
-    from_col = dnd["from"]
-    to_col = dnd["to"]
-    db_handler.move_card(selected_board, card_id, to_col)
-    st.experimental_rerun()
+    # Render columns
+    render_column(col_tasks, "Tasks")
+    render_column(col_in_progress, "In Progress")
+    render_column(col_done, "Done")
+    render_column(col_brainstorm, "BrainStorm")
+
+    # Add new card form
+    with st.form("add_card_form"):
+        st.subheader("Add a New Card")
+        column = st.selectbox("Select Column", ["Tasks", "In Progress", "Done", "BrainStorm"])
+        content = st.text_area("Card Content")
+        submitted = st.form_submit_button("Add Card")
+        if submitted:
+            if content.strip():
+                add_card(st.session_state.current_board, column, content)
+                st.success("Card added!")
+                st.experimental_rerun()
+            else:
+                st.error("Card content cannot be empty.")
