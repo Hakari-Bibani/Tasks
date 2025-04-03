@@ -1,7 +1,6 @@
 import streamlit as st
 import psycopg2
 import os
-import hashlib
 
 class DatabaseHandler:
     def __init__(self):
@@ -28,12 +27,8 @@ class DatabaseHandler:
             st.error(f"Database connection error: {e}")
             return None
     
-    def _hash_password(self, password):
-        """Create a SHA-256 hash of the password"""
-        return hashlib.sha256(password.encode()).hexdigest()
-    
-    def authenticate_board(self, table_name, password):
-        """Authenticate access to a board with the given password"""
+    def board_exists(self, table_name):
+        """Check if a board exists in the table"""
         if not self.conn:
             return False
         
@@ -43,24 +38,15 @@ class DatabaseHandler:
             cur.execute(f"SELECT COUNT(*) FROM {table_name}")
             count = cur.fetchone()[0]
             
-            if count == 0:
-                # Table is empty, no board exists yet
-                return False
-            
-            # Check if password matches
-            hashed_password = self._hash_password(password)
-            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
-            match_count = cur.fetchone()[0]
-            
             cur.close()
-            return match_count > 0
+            return count > 0
             
         except Exception as e:
-            st.error(f"Authentication error: {e}")
+            st.error(f"Error checking board: {e}")
             return False
     
-    def create_board(self, table_name, password):
-        """Create a new board with the given password"""
+    def create_board(self, table_name):
+        """Create a new board"""
         if not self.conn:
             return False
         
@@ -71,11 +57,10 @@ class DatabaseHandler:
             cur.execute(f"DELETE FROM {table_name}")
             
             # Create initial board settings row
-            hashed_password = self._hash_password(password)
             cur.execute(
-                f"INSERT INTO {table_name} (id, password, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
-                f"VALUES (%s, %s, %s, %s, %s, %s)",
-                ("settings", hashed_password, None, None, None, None)
+                f"INSERT INTO {table_name} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
+                f"VALUES (%s, %s, %s, %s, %s)",
+                ("settings", None, None, None, None)
             )
             
             self.conn.commit()
@@ -86,7 +71,7 @@ class DatabaseHandler:
             st.error(f"Board creation error: {e}")
             return False
     
-    def get_all_tasks(self, table_name, password):
+    def get_all_tasks(self, table_name):
         """Get all tasks from the board"""
         if not self.conn:
             return []
@@ -113,7 +98,7 @@ class DatabaseHandler:
             st.error(f"Error fetching tasks: {e}")
             return []
     
-    def add_task(self, table_name, password, task_id, task=None, in_progress=None, done=None, brainstorm=None):
+    def add_task(self, table_name, task_id, task=None, in_progress=None, done=None, brainstorm=None):
         """Add a new task to the board"""
         if not self.conn:
             return False
@@ -121,19 +106,11 @@ class DatabaseHandler:
         try:
             cur = self.conn.cursor()
             
-            # Verify password first
-            hashed_password = self._hash_password(password)
-            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
-            if cur.fetchone()[0] == 0:
-                st.error("Invalid password")
-                cur.close()
-                return False
-            
             # Insert new task
             cur.execute(
-                f"INSERT INTO {table_name} (id, password, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
-                f"VALUES (%s, %s, %s, %s, %s, %s)",
-                (task_id, hashed_password, task, in_progress, done, brainstorm)
+                f"INSERT INTO {table_name} (id, \"Task\", \"In Progress\", \"Done\", \"BrainStorm\") "
+                f"VALUES (%s, %s, %s, %s, %s)",
+                (task_id, task, in_progress, done, brainstorm)
             )
             
             self.conn.commit()
@@ -144,21 +121,13 @@ class DatabaseHandler:
             st.error(f"Error adding task: {e}")
             return False
     
-    def move_task(self, table_name, password, task_id, from_column, to_column):
+    def move_task(self, table_name, task_id, from_column, to_column):
         """Move a task from one column to another"""
         if not self.conn:
             return False
         
         try:
             cur = self.conn.cursor()
-            
-            # Verify password first
-            hashed_password = self._hash_password(password)
-            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
-            if cur.fetchone()[0] == 0:
-                st.error("Invalid password")
-                cur.close()
-                return False
             
             # Get the task content
             cur.execute(f"SELECT \"{from_column}\" FROM {table_name} WHERE id = %s", (task_id,))
@@ -178,21 +147,13 @@ class DatabaseHandler:
             st.error(f"Error moving task: {e}")
             return False
     
-    def delete_task(self, table_name, password, task_id):
+    def delete_task(self, table_name, task_id):
         """Delete a task from the board"""
         if not self.conn:
             return False
         
         try:
             cur = self.conn.cursor()
-            
-            # Verify password first
-            hashed_password = self._hash_password(password)
-            cur.execute(f"SELECT COUNT(*) FROM {table_name} WHERE password = %s", (hashed_password,))
-            if cur.fetchone()[0] == 0:
-                st.error("Invalid password")
-                cur.close()
-                return False
             
             # Delete the task
             cur.execute(f"DELETE FROM {table_name} WHERE id = %s", (task_id,))
