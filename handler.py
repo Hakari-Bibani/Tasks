@@ -4,12 +4,19 @@ import streamlit as st
 from psycopg2 import sql
 
 def get_connection():
-    return psycopg2.connect(st.secrets["db_connection"])
+    """Get database connection using secrets"""
+    try:
+        # For Neon PostgreSQL - use the connection URL format
+        return psycopg2.connect(st.secrets["db_connection"]["url"])
+    except Exception as e:
+        st.error(f"Failed to connect to database: {str(e)}")
+        raise
 
 def init_db():
     """Initialize database tables"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             # Create board mapping table
             cur.execute("""
@@ -20,15 +27,19 @@ def init_db():
             """)
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         st.error(f"Database initialization error: {str(e)}")
+        raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def get_all_boards():
     """Get all board names"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("SELECT board_name FROM board_mapping ORDER BY board_name;")
             return [row[0] for row in cur.fetchall()]
@@ -36,12 +47,14 @@ def get_all_boards():
         st.error(f"Database error: {str(e)}")
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def create_board(board_name):
     """Create a new board with its own table"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             # Create a unique table name
             table_name = f"board_{board_name.lower().replace(' ', '_')}"
@@ -65,15 +78,19 @@ def create_board(board_name):
             
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         st.error(f"Error creating board: {str(e)}")
+        raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def get_board_data(board_name):
     """Get all tasks for a board"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             # Get the table name for this board
             cur.execute("""
@@ -91,12 +108,14 @@ def get_board_data(board_name):
         st.error(f"Error getting board data: {str(e)}")
         return pd.DataFrame()
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def add_task_to_board(board_name, task_id, content, column):
     """Add a task to a specific column in a board"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             # Get the table name for this board
             cur.execute("""
@@ -125,15 +144,19 @@ def add_task_to_board(board_name, task_id, content, column):
             
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         st.error(f"Error adding task: {str(e)}")
+        raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def clear_board(board_name):
     """Clear all tasks from a board"""
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             # Get the table name for this board
             cur.execute("""
@@ -146,7 +169,10 @@ def clear_board(board_name):
             
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         st.error(f"Error clearing board: {str(e)}")
+        raise
     finally:
-        conn.close()
+        if conn:
+            conn.close()
