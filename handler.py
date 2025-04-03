@@ -1,9 +1,10 @@
+import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 class DatabaseHandler:
-    def __init__(self, connection_string):
-        self.conn_string = connection_string
+    def __init__(self):
+        self.conn_string = st.secrets["DATABASE_URL"]
 
     def get_connection(self):
         return psycopg2.connect(self.conn_string)
