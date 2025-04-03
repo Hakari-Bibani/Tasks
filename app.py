@@ -1,95 +1,125 @@
 import streamlit as st
 from streamlit_sortables import sort_items
-from handler import get_board_data, add_card, move_card, delete_card
+import handler
 
-# Page configuration for better layout
-st.set_page_config(page_title="Task Management", layout="wide")
+# Initialize database (create tables if not exist)
+handler.init_db()
 
-# Sidebar for selecting one of the six boards
-board = st.sidebar.selectbox("Select Board", [f"table{i}" for i in range(1,7)])
+st.title("Kanban Board")
 
-# Title and subtitle
-st.title("Task Management Board")
-st.subheader(f"Board: {board}")
+# Fetch available boards
+boards = handler.get_boards()
 
-# Load the tasks for the selected board from the database
-tasks, in_progress, done, brainstorm = get_board_data(board)
+# If no boards, prompt to create the first board
+if not boards:
+    st.subheader("No boards available. Create a new board:")
+    new_board_name = st.text_input("Board name", key="new_board_name")
+    if st.button("Create Board"):
+        if new_board_name.strip():
+            new_id = handler.add_board(new_board_name.strip())
+            if new_id:
+                st.success(f"Board '{new_board_name}' created!")
+                # Select the new board and refresh
+                st.session_state.selected_board = new_board_name.strip()
+                st.experimental_rerun()
+            else:
+                st.warning(f"Board '{new_board_name}' already exists. Please use a different name.")
+        else:
+            st.warning("Please enter a valid board name.")
+    st.stop()  # Stop here until a board is created
 
-# Prepare data structure for the drag-and-drop component (multi-column lists)
-board_structure = [
-    {"header": "Tasks", "items": [content for (_, content) in tasks]},
-    {"header": "In Progress", "items": [content for (_, content) in in_progress]},
-    {"header": "Done",    "items": [content for (_, content) in done]},
-    {"header": "BrainStorm", "items": [content for (_, content) in brainstorm]}
+# Board selection
+board_names = [b["name"] for b in boards]
+# Ensure a valid selected_board in session_state
+if "selected_board" not in st.session_state or st.session_state.selected_board not in board_names:
+    st.session_state.selected_board = board_names[0]
+selected_board = st.selectbox("Select Board", board_names, index=board_names.index(st.session_state.selected_board), key="selected_board")
+
+# Section to add a new board (when at least one board exists already)
+st.write("### Add a New Board")
+new_board = st.text_input("New board name", value="", key="new_board_input")
+if st.button("Create Board", key="create_board_btn"):
+    if new_board.strip():
+        new_id = handler.add_board(new_board.strip())
+        if new_id:
+            st.success(f"Board '{new_board}' created!")
+            # Auto-select the newly created board
+            st.session_state.selected_board = new_board.strip()
+            st.experimental_rerun()
+        else:
+            st.warning(f"Board '{new_board}' already exists.")
+    else:
+        st.warning("Board name cannot be empty.")
+
+# Refresh boards list (in case a new board was added)
+boards = handler.get_boards()
+current_board = next((b for b in boards if b["name"] == st.session_state.selected_board), None)
+current_board_id = current_board["id"] if current_board else None
+
+# Section to add a new card
+st.write("### Add a New Card")
+new_card_text = st.text_input("Card title", value="", key="new_card_text")
+new_card_col = st.selectbox("Add to column", ["Tasks", "In Progress", "Done", "BrainStorm"], index=0, key="new_card_col")
+if st.button("Add Card", key="add_card_btn"):
+    if new_card_text.strip():
+        handler.add_card(current_board_id, new_card_col, new_card_text.strip())
+        st.success(f"Added card to **{new_card_col}**.")
+        # Clear the input and refresh to show the new card
+        st.session_state.new_card_text = ""
+        st.experimental_rerun()
+    else:
+        st.warning("Card title cannot be empty.")
+
+# Fetch all cards for the current board from the database
+tasks = handler.get_tasks(current_board_id)
+
+# Section to delete a card
+st.write("### Delete a Card")
+if tasks:
+    # List cards as "[ID] title" for unique identification
+    options = [f"[{t['id']}] {t['content']}" for t in tasks]
+    delete_choice = st.selectbox("Select card to delete", options, key="delete_choice")
+    if st.button("Delete Card", key="delete_card_btn"):
+        if delete_choice:
+            # Parse the selected "[ID] title" to get the ID
+            task_id = int(delete_choice.split("]")[0].strip("["))
+            handler.delete_card(task_id)
+            st.success("Card deleted.")
+            st.experimental_rerun()
+else:
+    st.write("_No cards to delete._")
+
+# Prepare data for the draggable board columns
+COLUMNS = ["Tasks", "In Progress", "Done", "BrainStorm"]
+# Group tasks by column name
+col_items = {col: [] for col in COLUMNS}
+for t in tasks:
+    col_items[t["column"]].append(t)
+# Sort tasks within each column by their position
+for col in COLUMNS:
+    col_items[col].sort(key=lambda x: x["position"])
+# Build the data structure for streamlit-sortables
+original_items = [
+    {"header": col, "items": [f"[{t['id']}] {t['content']}" for t in col_items[col]]}
+    for col in COLUMNS
 ]
 
-# Display the draggable Kanban board and capture any changes (drag-and-drop)
-sorted_structure = sort_items(board_structure, multi_containers=True)
+# Render the sortable multi-column board (draggable cards)
+sorted_items = sort_items(original_items, multi_containers=True, key=f"board-{current_board_id}")
 
-# Check if any card was moved to a different column and update the database
-if sorted_structure != board_structure:
-    # Create a lookup from content to (id, original_column) for all cards
-    content_map = {}
-    for (id_val, content) in tasks:
-        content_map[content] = (id_val, "Tasks")
-    for (id_val, content) in in_progress:
-        content_map[content] = (id_val, "In Progress")
-    for (id_val, content) in done:
-        content_map[content] = (id_val, "Done")
-    for (id_val, content) in brainstorm:
-        content_map[content] = (id_val, "BrainStorm")
-    # Iterate through new sorted structure to detect column changes
-    for container in sorted_structure:
-        new_col = container["header"]
-        for content in container["items"]:
-            if content in content_map:
-                card_id, old_col = content_map[content]
-                if new_col != old_col:
-                    # Update the database to move the card to the new column
-                    move_card(board, card_id, old_col, new_col, content)
-    # Refresh data after moving cards
-    tasks, in_progress, done, brainstorm = get_board_data(board)
-
-# Layout four columns for Tasks, In Progress, Done, BrainStorm
-col1, col2, col3, col4 = st.columns(4)
-
-# Helper to render a column of cards with delete and add functionality
-def render_column(column_container, cards, col_name):
-    with column_container:
-        st.markdown(f"**{col_name}**")  # Column header
-        for (id_val, content) in cards:
-            # Each card displayed with a delete button (icon) next to it
-            card_col, del_col = st.columns([4, 1])
-            card_col.write(content)
-            if del_col.button("❌", key=f"delete-{id_val}"):
-                # If delete icon clicked, mark this card for deletion (confirmation next)
-                st.session_state["to_delete"] = (id_val, content)
-        # Input field and button to add a new card in this column
-        new_task = st.text_input(f"Add to {col_name}", "", key=f"newtask-{board}-{col_name}")
-        if st.button(f"Add {col_name}", key=f"add-{board}-{col_name}"):
-            if new_task:
-                add_card(board, col_name, new_task)
-                # Clear input and refresh the app to show the new card
-                st.session_state[f"newtask-{board}-{col_name}"] = ""
-                st.experimental_rerun()
-
-# Render each of the four columns with cards
-render_column(col1, tasks, "Tasks")
-render_column(col2, in_progress, "In Progress")
-render_column(col3, done, "Done")
-render_column(col4, brainstorm, "BrainStorm")
-
-# If a delete action was initiated, show a confirmation prompt
-if "to_delete" in st.session_state:
-    delete_id, delete_content = st.session_state["to_delete"]
-    st.warning(f"Are you sure you want to delete the card: '{delete_content}'?")
-    confirm_col, cancel_col = st.columns([1, 1])
-    if confirm_col.button("Yes, delete"):
-        delete_card(board, delete_id)
-        # Remove the flag and refresh
-        del st.session_state["to_delete"]
-        st.experimental_rerun()
-    if cancel_col.button("Cancel"):
-        # Cancel deletion
-        del st.session_state["to_delete"]
-        st.experimental_rerun()
+# If the user dragged/dropped cards, update positions in the database
+if sorted_items != original_items:
+    # Create a lookup of original positions for each task id
+    orig_positions = {t["id"]: (t["column"], t["position"]) for t in tasks}
+    # Loop through each container (column) in the new order
+    for container in sorted_items:
+        col_name = container["header"]
+        for pos, item in enumerate(container["items"]):
+            # Each item is "[ID] title"
+            item_id = int(item.split("]")[0].strip("["))
+            orig_col, orig_pos = orig_positions.get(item_id, (None, None))
+            # If column or position changed, update the task in DB
+            if orig_col != col_name or orig_pos != pos:
+                handler.move_card(item_id, col_name, pos)
+    # After updating all changes, refresh the app to reflect new order
+    st.experimental_rerun()
