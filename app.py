@@ -1,7 +1,14 @@
 import streamlit as st
-from handlers import *
-from sidebar import show_sidebar
 import json
+import sys
+import os
+
+# Add current directory to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Import local modules
+from handlers import get_tasks, add_task, move_task
+from sidebar import show_sidebar
 
 st.set_page_config(layout="wide", page_title="Kanban Board")
 
@@ -57,7 +64,7 @@ if st.query_params.get("drag_data"):
     st.query_params.clear()
     st.rerun()
 
-# JavaScript for drag and drop - FIXED VERSION
+# JavaScript for drag and drop
 js_code = """
 <script>
 document.addEventListener('dragstart', (e) => {
@@ -94,5 +101,4 @@ document.addEventListener('drop', (e) => {
 });
 </script>
 """
-
 st.components.v1.html(js_code)
