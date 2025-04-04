@@ -1,28 +1,31 @@
 import streamlit as st
-from handlers import create_new_board, get_tasks
+from handlers import get_connection
 
 def show_sidebar():
     with st.sidebar:
-        st.title("Kanban Boards")
+        st.title("Kanban Settings")
         
         # Board selection
-        current_board = st.selectbox(
-            "Select Board",
-            [f"table{i}" for i in range(1, 7)],
-            index=0,
-            key="board_selector"
-        )
-        st.session_state.current_board = current_board
+        conn = get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name LIKE 'table%'
+                    """)
+                    tables = [row[0] for row in cur.fetchall()]
+                    selected_table = st.selectbox(
+                        "Select Board",
+                        tables,
+                        index=0
+                    )
+                    st.session_state.current_board = selected_table
+            except Exception as e:
+                st.error(f"Error loading boards: {str(e)}")
+            finally:
+                conn.close()
         
-        # Create new board
-        new_board = st.text_input("Create New Board")
-        if st.button("Create Board") and new_board:
-            create_new_board(new_board)
-            st.success(f"Board {new_board} created!")
-            st.experimental_rerun()
-        
-        # Statistics
-        st.subheader("Statistics")
-        for column in ["Task", "In Progress", "Done", "BrainStorm"]:
-            tasks = get_tasks(current_board, column)
-            st.metric(column, len(tasks))
+        # New board creation
