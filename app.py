@@ -4,7 +4,6 @@ from sidebar import display_sidebar
 from handle import get_cards, add_card
 import uuid
 
-# Set page configuration
 st.set_page_config(page_title="Kanban Board", layout="wide")
 
 # Render the sidebar and get the selected board/table name
@@ -12,44 +11,32 @@ selected_table = display_sidebar()
 
 st.title(f"Board: {selected_table}")
 
-# Load current cards from the selected table (this function should return a dict keyed by status)
-# Example structure: { "Task": [{"id": "123", "content": "My task"}], ... }
+# Load current cards from the selected table
 cards = get_cards(selected_table)
 
-# Display board headers using columns
+# Create four columns for the board
 col_task, col_inprogress, col_done, col_brainstorm = st.columns(4)
 
-# Dictionary to map headers to their Streamlit column
-columns = {
-    "Task": col_task,
-    "In Progress": col_inprogress,
-    "Done": col_done,
-    "Brain Storm": col_brainstorm,
-}
-
-# Function to render cards for each status
 def render_cards(status, container):
     container.subheader(status)
-    # List cards for the given status
+    # Display cards for the given status
     for card in cards.get(status, []):
         container.markdown(f"**{card['content']}**")
-    # Button to add a new card
+    # Provide a way to add a new card
     with container.expander(f"Add new card to {status}"):
         new_content = st.text_input(f"New card for {status}", key=f"{status}_new")
         if st.button("Add Card", key=f"btn_{status}"):
             if new_content:
-                # Generate a unique id for the card and add it via handle.py function
                 card_id = str(uuid.uuid4())
                 add_card(selected_table, status, card_id, new_content)
-                st.experimental_rerun()
+                st.experimental_rerun()  # Refresh the app to show the new card
 
 # Render cards in each column
-for status, col in columns.items():
+for status, col in zip(["Task", "In Progress", "Done", "Brain Storm"],
+                         [col_task, col_inprogress, col_done, col_brainstorm]):
     render_cards(status, col)
 
-# --- Drag & Drop Section ---
-# The following HTML embeds a simple board using SortableJS.
-# For a full implementation, you would need to sync drag events with your backend.
+# --- Drag & Drop Demo Section (Static Example) ---
 components.html(
     """
     <html>
@@ -67,7 +54,6 @@ components.html(
           <div class="column" id="task">
             <h3>Task</h3>
             <div id="task-list">
-              <!-- Cards would be dynamically inserted here -->
               <div class="card">Example Task</div>
             </div>
           </div>
@@ -91,14 +77,12 @@ components.html(
           </div>
         </div>
         <script>
-          // Initialize SortableJS for each column list
+          // Initialize SortableJS for each column list (this is just a demo)
           ['task-list', 'inprogress-list', 'done-list', 'brainstorm-list'].forEach(function(id) {
               new Sortable(document.getElementById(id), {
                   group: 'shared',
                   animation: 150,
                   onEnd: function (evt) {
-                    // This callback is where you would capture the card movement.
-                    // You could use an AJAX call or update Streamlit's session state via a custom component.
                     console.log('Moved card from', evt.from.id, 'to', evt.to.id);
                   }
               });
