@@ -3,7 +3,7 @@ from handle import get_tables, add_table
 
 def display_sidebar():
     st.sidebar.header("Boards")
-    # Get a list of existing tables/boards
+    # Retrieve a list of available tables (boards)
     tables = get_tables()
     selected_table = st.sidebar.selectbox("Select Board", tables)
     
@@ -12,5 +12,5 @@ def display_sidebar():
     if st.sidebar.button("Create Board"):
         if new_table_name:
             add_table(new_table_name)
-            st.experimental_rerun()
+            st.experimental_rerun()  # Refresh after creating a board
     return selected_table
