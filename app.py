@@ -57,9 +57,42 @@ if st.query_params.get("drag_data"):
     st.query_params.clear()
     st.rerun()
 
-# Drag and drop JavaScript
-st.components.v1.html("""
+# JavaScript for drag and drop - FIXED VERSION
+js_code = """
 <script>
 document.addEventListener('dragstart', (e) => {
     if (e.target.classList.contains('kanban-card')) {
-        const taskData =
+        const taskData = {
+            task_id: e.target.id,
+            old_column: e.target.dataset.column,
+            content: e.target.innerText
+        };
+        e.dataTransfer.setData('text/plain', JSON.stringify(taskData));
+    }
+});
+
+document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+});
+
+document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const taskData = JSON.parse(e.dataTransfer.getData('text/plain'));
+    const newColumn = e.target.closest('.stContainer').querySelector('h3').innerText;
+    
+    if(newColumn && newColumn !== taskData.old_column) {
+        const params = new URLSearchParams(window.location.search);
+        params.set('drag_data', JSON.stringify({
+            task_id: taskData.task_id,
+            old_column: taskData.old_column,
+            new_column: newColumn
+        }));
+        window.history.replaceState(null, null, `?${params.toString()}`);
+        window.location.reload();
+    }
+});
+</script>
+"""
+
+st.components.v1.html(js_code)
