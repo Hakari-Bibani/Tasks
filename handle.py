@@ -5,39 +5,42 @@ import streamlit as st
 
 @st.cache_resource
 def get_connection():
-    return psycopg2.connect(os.environ['NEONDB_URI'])
+    try:
+        return psycopg2.connect(os.environ['NEONDB_URI'])
+    except Exception as e:
+        st.error(f"Connection error: {str(e)}")
+        return None
 
-def get_tasks(board, column):
-    with get_connection() as conn:
+def get_tasks(table_name, column_name):
+    conn = get_connection()
+    if not conn:
+        return []
+    
+    try:
         with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("SELECT id, {} as content FROM {}")
-                .format(sql.Identifier(column), sql.Identifier(board))
+            query = sql.SQL("""
+                SELECT id, {} AS content 
+                FROM {}
+                WHERE {} IS NOT NULL AND {} <> ''
+            """).format(
+                sql.Identifier(column_name),
+                sql.Identifier(table_name),
+                sql.Identifier(column_name),
+                sql.Identifier(column_name)
             )
+            cur.execute(query)
             return [{'id': row[0], 'content': row[1]} for row in cur.fetchall()]
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+        return []
+    finally:
+        conn.close()
 
-def handle_task_update(board, task_id, column, content=None):
-    with get_connection() as conn:
+def add_task(table_name, column_name, content):
+    conn = get_connection()
+    if not conn:
+        return
+    
+    try:
         with conn.cursor() as cur:
-            if 'new_task' in task_id:
-                cur.execute(
-                    sql.SQL("INSERT INTO {} (id, {}) VALUES (%s, %s)")
-                    .format(sql.Identifier(board), sql.Identifier(column)),
-                    (task_id, content)
-                )
-            else:
-                cur.execute(
-                    sql.SQL("UPDATE {} SET {} = %s WHERE id = %s")
-                    .format(sql.Identifier(board), sql.Identifier(column)),
-                    (content or column, task_id)
-                )
-            conn.commit()
-
-def create_new_board(board_name):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("CREATE TABLE IF NOT EXISTS {} (id TEXT PRIMARY KEY, Task TEXT, \"In Progress\" TEXT, Done TEXT, BrainStorm TEXT)")
-                .format(sql.Identifier(board_name))
-            )
-            conn.commit()
+            task_id = f"task_{hash(content + column_name)}"  # Simple
