@@ -1,7 +1,6 @@
 import streamlit as st
 import psycopg2
 import uuid
-import time
 
 # Configure the page
 st.set_page_config(page_title="Kanban Board", layout="wide")
@@ -35,7 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Database connection string - use this directly instead of from secrets
+# Database connection string
 DB_CONNECTION = "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 # Database connection
@@ -52,7 +51,7 @@ def get_all_items():
         cur.close()
         conn.close()
         
-        # Organize items by category
+        # Initialize empty lists for each category
         tasks = []
         in_progress = []
         done = []
@@ -151,18 +150,22 @@ def delete_item(item_id):
     except Exception as e:
         st.error(f"Error deleting item: {e}")
 
+# Initialize session state
+def init_session_state():
+    if 'items' not in st.session_state:
+        st.session_state['items'] = get_all_items()
+
 # Main app function
 def main():
     st.title("Kanban Board")
     
-    # Initialize session state for items if not present
-    if 'items' not in st.session_state:
-        st.session_state.items = get_all_items()
+    # Initialize session state
+    init_session_state()
     
     # Add refresh button
     if st.button("↻ Refresh Board"):
-        st.session_state.items = get_all_items()
-        st.experimental_rerun()
+        st.session_state['items'] = get_all_items()
+        st.rerun()
     
     # Create columns for the kanban board
     columns = ["Task", "In Progress", "Done", "BrainStorm"]
@@ -173,8 +176,11 @@ def main():
         with cols[i]:
             st.markdown(f'<div class="kanban-header">{column_name}</div>', unsafe_allow_html=True)
             
+            # Make sure the column exists in session state items
+            items_in_column = st.session_state['items'].get(column_name, [])
+            
             # Display existing items
-            for item in st.session_state.items[column_name]:
+            for item in items_in_column:
                 # Create a unique key for each item
                 item_key = f"{column_name}_{item['id']}"
                 
@@ -182,7 +188,6 @@ def main():
                 with st.container():
                     col1, col2 = st.columns([4, 1])
                     with col1:
-                        # Display the card with data attributes for JavaScript
                         st.markdown(f'''
                         <div class="kanban-card" 
                              draggable="true" 
@@ -194,36 +199,29 @@ def main():
                     with col2:
                         if st.button("✖", key=f"delete_{item_key}"):
                             delete_item(item['id'])
-                            st.session_state.items = get_all_items()
-                            st.experimental_rerun()
+                            st.session_state['items'] = get_all_items()
+                            st.rerun()
             
             # Add new item input for each column
             new_item = st.text_area(f"Add to {column_name}", key=f"new_{column_name}", placeholder="Type here...", height=100)
             if st.button(f"Add Item", key=f"add_{column_name}"):
                 if new_item.strip():
                     add_item(column_name, new_item)
-                    st.session_state.items = get_all_items()
-                    st.experimental_rerun()
+                    st.session_state['items'] = get_all_items()
+                    st.rerun()
     
-    # Add drag-and-drop functionality with JavaScript
+    # Add drag-and-drop functionality
     st.components.v1.html("""
     <script>
-    // Wait for DOM to be fully loaded
-    document.addEventListener('DOMContentLoaded', function() {
-        // Find all cards and columns
-        setupDragAndDrop();
-        
-        // We need to wait a bit for Streamlit to fully render
-        setTimeout(setupDragAndDrop, 1000);
-    });
-    
+    // Function to set up drag and drop
     function setupDragAndDrop() {
+        console.log("Setting up drag and drop");
         const cards = document.querySelectorAll('.kanban-card');
         const columns = document.querySelectorAll('.stColumn');
         
-        // Add drag event listeners to cards
         cards.forEach(card => {
             card.addEventListener('dragstart', function(e) {
+                console.log("Drag started", this.dataset.id);
                 e.dataTransfer.setData('text/plain', JSON.stringify({
                     id: this.dataset.id,
                     text: this.textContent.trim(),
@@ -232,7 +230,6 @@ def main():
             });
         });
         
-        // Add drop event listeners to columns
         columns.forEach(column => {
             column.addEventListener('dragover', function(e) {
                 e.preventDefault();
@@ -240,23 +237,27 @@ def main():
             
             column.addEventListener('drop', function(e) {
                 e.preventDefault();
+                console.log("Drop event triggered");
+                
                 try {
                     const data = JSON.parse(e.dataTransfer.getData('text/plain'));
                     const headerElement = this.querySelector('.kanban-header');
                     if (!headerElement) return;
                     
                     const toColumn = headerElement.textContent.trim();
+                    console.log("Moving from", data.fromColumn, "to", toColumn);
                     
                     if (data.fromColumn !== toColumn) {
-                        // Send data to Python via Streamlit's component communication
+                        // Use Streamlit's component communication
                         window.parent.postMessage({
-                            type: 'streamlit:moveItem',
-                            moveData: {
+                            type: 'streamlit:setComponentValue',
+                            value: {
                                 id: data.id,
                                 from_column: data.fromColumn,
                                 to_column: toColumn,
                                 text: data.text
-                            }
+                            },
+                            key: 'move_item_data'
                         }, '*');
                     }
                 } catch (error) {
@@ -265,33 +266,24 @@ def main():
             });
         });
     }
+
+    // Run setup when DOM is fully loaded and again after a small delay
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(setupDragAndDrop, 1000);
+    });
+
+    // Also run setup now in case DOM is already loaded
+    setTimeout(setupDragAndDrop, 1000);
     </script>
     """, height=0)
-
-    # Listen for custom events from JavaScript
-    components_code = """
-    <script>
-    window.addEventListener('message', function(event) {
-        if (event.data.type === 'streamlit:moveItem' && event.data.moveData) {
-            const moveData = event.data.moveData;
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: moveData,
-                key: 'move_item_data'
-            }, '*');
-        }
-    });
-    </script>
-    """
-    st.components.v1.html(components_code, height=0)
     
     # Process move item requests
-    if st.session_state.get('move_item_data'):
+    if 'move_item_data' in st.session_state:
         data = st.session_state.move_item_data
         move_item(data['id'], data['from_column'], data['to_column'], data['text'])
-        st.session_state.items = get_all_items()
+        st.session_state['items'] = get_all_items()
         del st.session_state.move_item_data
-        st.experimental_rerun()
+        st.rerun()
 
 if __name__ == "__main__":
     main()
