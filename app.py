@@ -1,77 +1,77 @@
 # app.py
 import streamlit as st
+import handle
 import streamlit_authenticator as stauth
-import json
-from handle import initialize_table, get_tasks, add_task, update_tasks
-# For an improved drag-and-drop experience, consider integrating a component like streamlit-sortable.
 
-# --- INITIAL SETUP AND AUTHENTICATION ---
+# --- Authentication Setup ---
+# In a production app you may want to store these credentials securely.
+# In this demo we use an in-code dictionary.
+# For example, you might store the following in Streamlit secrets as well.
 
-# Initialize the table (and the default row) if needed
-initialize_table()
+names = ["John Doe"]
+usernames = ["johndoe"]
+# For demonstration purposes, we use a simple password.
+passwords = ["123"]  # In production, use strong passwords and store them hashed.
+hashed_passwords = stauth.Hasher(passwords).generate()
 
-# Load credentials from secrets
-credentials = st.secrets["credentials"]
+credentials = {
+    "usernames": {
+        usernames[0]: {"name": names[0], "password": hashed_passwords[0]}
+    }
+}
 
-# Create the authenticator object
-authenticator = stauth.Authenticate(
-    credentials["usernames"],
-    credentials["cookie"]["name"],
-    credentials["cookie"]["key"],
-    credentials["cookie"]["expiry_days"]
-)
+authenticator = stauth.Authenticate(credentials, 
+                                    "my_cookie_name", 
+                                    "my_signature_key", 
+                                    cookie_expiry_days=30)
 
 name, authentication_status, username = authenticator.login("Login", "main")
 
 if authentication_status:
-    st.sidebar.write(f"Welcome, {name}!")
+    st.sidebar.write(f"Welcome {name}!")
+    authenticator.logout("Logout", "sidebar")
+    
     st.title("Kanban Board")
     
-    # --- COLUMN DEFINITIONS ---
-    # The mapping between UI names and database column names.
-    # (Note: Our DB table uses "BrainStorm" while the header is "Brainstorm".)
-    columns_mapping = {
-       "Task": "Task",
-       "In Progress": "\"In Progress\"",
-       "Done": "Done",
-       "Brainstorm": "BrainStorm"
-    }
+    # --- Load tasks from database ---
+    tasks = handle.get_tasks()
     
-    # Layout the columns using Streamlit's layout
-    col1, col2, col3, col4 = st.columns(4)
-    cols_ui = [("Task", col1), ("In Progress", col2), ("Done", col3), ("Brainstorm", col4)]
+    # Define board categories.
+    categories = ["Task", "In Progress", "Done", "BrainStorm"]
+    tasks_by_category = {cat: [] for cat in categories}
+    for task in tasks:
+        tasks_by_category[task["category"]].append(task)
     
-    # Dictionary to hold new task lists (if users edit via the text area)
-    updated_tasks = {}
+    # Create 4 equal columns for the board
+    cols = st.columns(4)
     
-    for header, col in cols_ui:
-        with col:
-            st.header(header)
-            # Load the tasks from the DB (stored as a JSON list in the text field)
-            tasks = get_tasks(columns_mapping[header])
-            # Show the tasks as JSON (this example uses a text area for simplicity)
-            tasks_json = json.dumps(tasks, indent=2)
-            new_tasks_json = st.text_area(f"{header} Tasks (JSON)", tasks_json, height=300, key=header)
-            try:
-                updated_tasks[header] = json.loads(new_tasks_json)
-            except Exception:
-                st.error("The JSON format is invalid. Please fix the value.")
+    # Iterate over each category to display tasks and input forms.
+    for idx, cat in enumerate(categories):
+        with cols[idx]:
+            st.header(cat)
             
-            # Input and button to add a new task
-            new_task = st.text_input(f"Add new task to {header}", key=f"new_{header}")
-            if st.button(f"Add Task to {header}", key=f"button_{header}") and new_task:
-                add_task(columns_mapping[header], new_task)
-                st.experimental_rerun()  # refresh the app after adding a task
+            # List tasks in this category.
+            for t in tasks_by_category[cat]:
+                st.write(t["text"])
+                # Delete button – clicking it will remove the task.
+                if st.button(f"Delete", key=f"del_{t['id']}"):
+                    handle.delete_task(t['id'])
+                    st.experimental_rerun()
+                
+                # Option to move task to another column (simulate drag and drop).
+                new_cat = st.selectbox("Move to", [c for c in categories if c != cat], key=f"move_{t['id']}")
+                if st.button("Update", key=f"update_{t['id']}"):
+                    handle.update_task_category(t['id'], new_cat)
+                    st.experimental_rerun()
 
-    # Save any manual changes to JSON (for example, if you implement drag-and-drop later)
-    if st.button("Save Changes"):
-        for header, tasks_list in updated_tasks.items():
-            update_tasks(columns_mapping[header], tasks_list)
-        st.success("Tasks updated successfully!")
-    
-    authenticator.logout("Logout", "sidebar")
-
-elif authentication_status is False:
-    st.error("Username/password is incorrect")
-elif authentication_status is None:
-    st.warning("Please enter your username and password")
+            # Input to add a new task.
+            new_task = st.text_input(f"Add new {cat} task", key=f"new_{cat}")
+            if st.button(f"Add", key=f"add_{cat}") and new_task:
+                handle.add_task(cat, new_task)
+                st.experimental_rerun()
+                
+else:
+    if authentication_status is False:
+        st.error("Username/password is incorrect")
+    elif authentication_status is None:
+        st.warning("Please enter your username and password")
