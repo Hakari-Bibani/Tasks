@@ -35,11 +35,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Database connection string - use this directly instead of from secrets
+DB_CONNECTION = "postgresql://neondb_owner:npg_vJSrcVfZ7N6a@ep-snowy-bar-a5zv1qhw-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
 # Database connection
 def get_connection():
-    # Get database credentials from secrets
-    conn_string = st.secrets["postgres_connection"]
-    return psycopg2.connect(conn_string)
+    return psycopg2.connect(DB_CONNECTION)
 
 # Get all items from the database
 def get_all_items():
@@ -150,28 +151,8 @@ def delete_item(item_id):
     except Exception as e:
         st.error(f"Error deleting item: {e}")
 
-# Simple password protection
-def password_protection():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-        
-    if not st.session_state.authenticated:
-        st.title("Kanban Board Login")
-        password = st.text_input("Enter password", type="password")
-        if st.button("Login"):
-            if password == st.secrets["password"]:
-                st.session_state.authenticated = True
-                st.experimental_rerun()
-            else:
-                st.error("Incorrect password")
-        return False
-    return True
-
 # Main app function
 def main():
-    if not password_protection():
-        return
-        
     st.title("Kanban Board")
     
     # Initialize session state for items if not present
@@ -201,8 +182,15 @@ def main():
                 with st.container():
                     col1, col2 = st.columns([4, 1])
                     with col1:
-                        # Display the card with drag functionality
-                        st.markdown(f'<div class="kanban-card" draggable="true" data-id="{item["id"]}" data-column="{column_name}">{item["text"]}</div>', unsafe_allow_html=True)
+                        # Display the card with data attributes for JavaScript
+                        st.markdown(f'''
+                        <div class="kanban-card" 
+                             draggable="true" 
+                             data-id="{item["id"]}" 
+                             data-column="{column_name}">
+                            {item["text"]}
+                        </div>
+                        ''', unsafe_allow_html=True)
                     with col2:
                         if st.button("✖", key=f"delete_{item_key}"):
                             delete_item(item['id'])
@@ -217,11 +205,19 @@ def main():
                     st.session_state.items = get_all_items()
                     st.experimental_rerun()
     
-    # Add functionality to handle drag and drop
-    st.markdown("""
+    # Add drag-and-drop functionality with JavaScript
+    st.components.v1.html("""
     <script>
-    // Drag and drop functionality
+    // Wait for DOM to be fully loaded
     document.addEventListener('DOMContentLoaded', function() {
+        // Find all cards and columns
+        setupDragAndDrop();
+        
+        // We need to wait a bit for Streamlit to fully render
+        setTimeout(setupDragAndDrop, 1000);
+    });
+    
+    function setupDragAndDrop() {
         const cards = document.querySelectorAll('.kanban-card');
         const columns = document.querySelectorAll('.stColumn');
         
@@ -230,7 +226,7 @@ def main():
             card.addEventListener('dragstart', function(e) {
                 e.dataTransfer.setData('text/plain', JSON.stringify({
                     id: this.dataset.id,
-                    text: this.textContent,
+                    text: this.textContent.trim(),
                     fromColumn: this.dataset.column
                 }));
             });
@@ -244,54 +240,58 @@ def main():
             
             column.addEventListener('drop', function(e) {
                 e.preventDefault();
-                const data = JSON.parse(e.dataTransfer.getData('text/plain'));
-                const toColumn = this.querySelector('.kanban-header').textContent;
-                
-                if (data.fromColumn !== toColumn) {
-                    // Send to Streamlit via session_state
-                    const moveData = {
-                        id: data.id,
-                        from_column: data.fromColumn,
-                        to_column: toColumn,
-                        text: data.text
-                    };
+                try {
+                    const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                    const headerElement = this.querySelector('.kanban-header');
+                    if (!headerElement) return;
                     
-                    // This function will communicate with Streamlit
-                    window.parent.postMessage({
-                        type: 'streamlit:moveItem',
-                        data: moveData
-                    }, '*');
+                    const toColumn = headerElement.textContent.trim();
+                    
+                    if (data.fromColumn !== toColumn) {
+                        // Send data to Python via Streamlit's component communication
+                        window.parent.postMessage({
+                            type: 'streamlit:moveItem',
+                            moveData: {
+                                id: data.id,
+                                from_column: data.fromColumn,
+                                to_column: toColumn,
+                                text: data.text
+                            }
+                        }, '*');
+                    }
+                } catch (error) {
+                    console.error('Error in drop handler:', error);
                 }
             });
         });
-    });
+    }
     </script>
-    """, unsafe_allow_html=True)
+    """, height=0)
 
-    # Handle the move action with a callback
-    if st.session_state.get('moveItemData'):
-        data = st.session_state.moveItemData
-        move_item(data['id'], data['from_column'], data['to_column'], data['text'])
-        st.session_state.items = get_all_items()
-        del st.session_state.moveItemData
-        st.experimental_rerun()
-        
-    # Component to handle the JavaScript bridge
-    import streamlit.components.v1 as components
-    components.html("""
+    # Listen for custom events from JavaScript
+    components_code = """
     <script>
-    // Handle messages from the parent window
-    window.addEventListener('message', function(e) {
-        if (e.data.type === 'streamlit:moveItem') {
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'streamlit:moveItem' && event.data.moveData) {
+            const moveData = event.data.moveData;
             window.parent.postMessage({
                 type: 'streamlit:setComponentValue',
-                value: e.data.data,
-                key: 'moveItemData'
+                value: moveData,
+                key: 'move_item_data'
             }, '*');
         }
     });
     </script>
-    """, height=0)
+    """
+    st.components.v1.html(components_code, height=0)
+    
+    # Process move item requests
+    if st.session_state.get('move_item_data'):
+        data = st.session_state.move_item_data
+        move_item(data['id'], data['from_column'], data['to_column'], data['text'])
+        st.session_state.items = get_all_items()
+        del st.session_state.move_item_data
+        st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
